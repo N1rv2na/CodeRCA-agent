@@ -1,24 +1,58 @@
 # CodeRCA
 
-CodeRCA 是一个面向 Python/Django 单仓库 CI 测试失败的根因分析 Agent。它围绕“Hypothesis → Evidence → Experiment”循环，自主检索相关代码、调用诊断工具、形成根因候选，并在隔离沙箱中验证候选补丁。
+CodeRCA 是一个面向单仓库 CI 测试失败的根因分析 Agent 原型。它围绕 **Hypothesis → Evidence → Experiment** 循环，自主检查代码变更、检索相关实现、运行诊断实验，并在隔离环境中验证 Top-1 候选补丁。
 
-项目主要用于展示 AI Agent 工程能力，包括：
+项目用于展示 AI Agent 开发中的工作流编排、工具系统、上下文工程、代码 RAG、受控执行和工程 Evaluation，而不是构建生产级故障平台或研究级 Benchmark。
 
-- 显式 Agent 工作流与状态管理；
-- 结构化工具协议与权限边界；
-- BM25、向量检索与 reranking 组合的代码 RAG；
-- 容器沙箱中的实验与修复验证；
-- 可复现的基线、消融和端到端评测。
+## 核心闭环
+
+```mermaid
+flowchart LR
+    Task[Task Manifest] --> State[显式生命周期状态机]
+    State --> Loop[受约束 ReAct 诊断循环]
+    Loop --> Tools[结构化诊断工具]
+    Tools --> Evidence[Supporting / Contradicting Evidence]
+    Evidence --> Rank[Root Cause Candidate 排序]
+    Rank --> Patch[Top-1 候选补丁]
+    Patch --> Validation[Docker Validation]
+    Validation --> Report[Root Cause Report + Evaluation]
+```
+
+Agent 初始形成最多三个可证伪 Hypothesis。每次工具调用必须关联一个活跃 Hypothesis、调用目的和预期 Observation；程序负责 Schema、状态转移、权限、超时、Evidence Score、工具预算和停止条件。
+
+## 技术亮点
+
+- **Agent 工作流**：最小显式状态机控制生命周期，在诊断循环内部使用受约束 ReAct；
+- **Tool Runtime**：统一 Tool Spec 管理输入输出 Schema、权限、超时、错误和审计，MVP 固定五个诊断工具；
+- **Context Engineering**：每一步从结构化 Agent 状态重新组装有界上下文，不无限追加完整历史；
+- **代码 RAG**：Python AST 语义分块，结合 BM25、向量召回、固定融合和 CPU reranker；
+- **实验与评测**：在最小 Docker 执行边界中运行测试和补丁，通过 Outcome Evaluation 与 Trajectory Evaluation 检查结果和 Agent 行为。
 
 ## MVP 范围
 
-第一版聚焦业务逻辑回归、API 契约变化和配置错误，不覆盖生产环境告警、性能问题、外部服务故障、随机失败或并发故障。
+第一版正式支持：
 
-项目目前处于设计与实现准备阶段。
+- 一个冻结的开源 Django 仓库；
+- 由已知代码变更导致的业务逻辑回归；
+- 同仓库、同镜像和注册命令集合下的新 Diagnosis Task；
+- 三个分别强调 diff/代码、RAG 和测试 Experiment 的冻结任务；
+- 一个外部本地模型服务、本机 CLI 和串行 Diagnosis Run。
+
+以下能力延期：API 契约变化、配置错误、任意仓库兼容、完整检索消融、Baseline、LLM Judge、大规模隐藏集、FastAPI、Web UI、SQLite、云端模型、MCP 和生产级沙箱。
+
+三个冻结任务只用于证明原型闭环和工程回归，不用于声称统计显著性或跨仓库泛化能力。
+
+## 项目状态
+
+项目已完成 MVP Scope Reduction、领域建模、架构设计和 implementation-ready specification，目前进入实现准备阶段。仓库尚未提供可运行的 Agent 命令或性能结果。
+
+- [Implementation specification issue](https://github.com/N1rv2na/CodeRCA-agent/issues/1)
+- 目标交付方式：源码安装 + 外部本地模型服务 + 固定 Docker 镜像 + CLI
 
 ## 文档
 
-- [MVP Specification](docs/specification.md)
-- [项目设计](docs/design.md)
-- [领域术语](CONTEXT.md)
+- [两周 MVP 设计](docs/design.md)
+- [MVP Specification](docs/spec.md)
+- [统一语言](CONTEXT.md)
 - [架构决策记录](docs/adr/README.md)
+- [文档索引](docs/README.md)

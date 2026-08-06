@@ -10,6 +10,10 @@ CodeRCA 的领域是对单仓库 CI 测试失败进行假设驱动的根因诊�
 一组不可变的故障输入与执行约束，描述需要诊断的问题。
 _Avoid_: Job、Case、一次模型运行
 
+**Task Manifest（任务清单）**:
+对一个 Diagnosis Task 的版本化描述，固定故障输入、运行环境与执行边界。
+_Avoid_: 标准答案、Agent Prompt、任意运行参数
+
 **Diagnosis Run（诊断运行）**:
 Agent 针对一个 Diagnosis Task 的一次独立执行实例。
 _Avoid_: Diagnosis Task、评测任务
@@ -75,6 +79,14 @@ _Avoid_: Hidden Validation、最终评测反馈
 _Avoid_: Agent 可反复迭代的测试、公开测试
 
 ### 评测
+
+**Outcome Evaluation（结果评测）**:
+检查 Diagnosis Run 的 Root Cause、候选补丁、Validation 和报告契约是否满足冻结任务的确定性预期。
+_Avoid_: Trajectory Evaluation、统计泛化结论
+
+**Trajectory Evaluation（轨迹评测）**:
+检查 Diagnosis Run 中 Hypothesis、Experiment、工具调用、Evidence 和停止行为是否遵守 Agent 不变量。
+_Avoid_: Outcome Evaluation、私有思维链审查
 
 **Baseline（基线）**:
 在相同任务、模型和环境约束下，预先冻结并用于衡量 CodeRCA 增益的诊断方案。

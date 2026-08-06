@@ -1,6 +1,6 @@
 # ADR-0005：分离 SQLite 元数据与内容寻址 Artifact
 
-- 状态：Accepted
+- 状态：Superseded by ADR-0008
 - 日期：2026-08-05
 
 ## 背景
