@@ -66,12 +66,6 @@ class RunArtifacts(ContractModel):
     events_path: Path
     report_path: Path
 
-    @property
-    def directory(self) -> Path:
-        """Backward-friendly alias for the run directory."""
-
-        return self.run_directory
-
 
 class DiagnosisRunResult(ContractModel):
     run_id: NonEmptyString
