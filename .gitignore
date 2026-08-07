@@ -2,3 +2,21 @@
 /task_plan.md
 /findings.md
 /progress.md
+
+# Python development artifacts
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local CodeRCA runs and agent scratch state
+.coderca-runs/
+.superpowers/

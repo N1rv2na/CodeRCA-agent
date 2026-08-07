@@ -44,10 +44,27 @@ Agent 初始形成最多三个可证伪 Hypothesis。每次工具调用必须关
 
 ## 项目状态
 
-项目已完成 MVP Scope Reduction、领域建模、架构设计和 implementation-ready specification，目前进入实现准备阶段。仓库尚未提供可运行的 Agent 命令或性能结果。
+项目已完成 MVP Scope Reduction、领域建模、架构设计和 implementation-ready specification。当前提供 CRCA-001 的 Manifest-to-Run walking skeleton；完整诊断状态机和后续工具仍在规划中。
 
 - [Implementation specification issue](https://github.com/N1rv2na/CodeRCA-agent/issues/1)
 - 目标交付方式：源码安装 + 外部本地模型服务 + 固定 Docker 镜像 + CLI
+
+## CRCA-001 本地运行
+
+使用 Python 3.10 或更高版本创建环境并安装开发依赖：
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
+```
+
+提交符合 Task Manifest Schema 的 JSON 文件后运行：
+
+```bash
+.venv/bin/coderca MANIFEST.json --runs-dir .coderca-runs
+```
+
+命令会输出结构化终态摘要。每个 Diagnosis Run 目录包含 `manifest.json`、`events.jsonl` 和 `report.json`。当前使用确定性的 `FakeModelProvider`，不会调用真实模型服务，也不会执行仓库工具或补丁验证。
 
 ## 文档
 
