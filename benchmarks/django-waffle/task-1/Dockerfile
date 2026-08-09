@@ -4,5 +4,6 @@ WORKDIR /opt/coderca-task
 COPY requirements.lock ./requirements.lock
 RUN python -m pip install --no-cache-dir --require-hashes -r requirements.lock \
     && python -m pip check
+COPY probe.py ./probe.py
 
 WORKDIR /workspace

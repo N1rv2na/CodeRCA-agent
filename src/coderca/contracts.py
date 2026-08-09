@@ -32,6 +32,19 @@ class TaskManifest(ContractModel):
     tool_call_limit: int = Field(ge=1, le=8)
 
 
+class EvaluationGroundTruth(ContractModel):
+    """Evaluation-only facts that must not enter Agent-visible task input."""
+
+    schema_version: Literal["1"]
+    task_id: NonEmptyString
+    root_symbol: NonEmptyString
+    trigger_condition: NonEmptyString
+    defect_mechanism: NonEmptyString
+    propagation_path: NonEmptyString
+    failure_manifestation: NonEmptyString
+    reference_repair_behavior: NonEmptyString
+
+
 class ModelCompletion(ContractModel):
     """The narrow result returned by an external model boundary."""
 

@@ -1,0 +1,6 @@
+{
+  "argv": ["python", "/opt/coderca-task/probe.py"],
+  "command_id": "django_waffle_task_1_v1",
+  "schema_version": "1",
+  "timeout_seconds": 30
+}

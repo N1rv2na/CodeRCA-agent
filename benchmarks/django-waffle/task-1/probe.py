@@ -17,17 +17,19 @@ import django  # noqa: E402
 django.setup()
 
 from django.contrib.auth import get_user_model  # noqa: E402
-from django.core.management import execute_from_command_line  # noqa: E402
-from django.test import SimpleTestCase  # noqa: E402
 from waffle.models import Flag  # noqa: E402
 
+EXPECTED_FAILURE_MARKER = "CRCA_TASK_1_EXPECTED_ASSERTION_MISMATCH"
 
-class Task1Probe(SimpleTestCase):
-    def test_case_17(self) -> None:
-        flag = Flag(name="task-1", everyone=False, superusers=True)
-        actor = get_user_model()(is_superuser=True)
-        self.assertIs(flag.is_active_for_user(actor), False)
+
+def main() -> int:
+    flag = Flag(name="task-1", everyone=False, superusers=True)
+    actor = get_user_model()(is_superuser=True)
+    if flag.is_active_for_user(actor) is not False:
+        print(EXPECTED_FAILURE_MARKER, file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    execute_from_command_line([sys.argv[0], "test", "probe", "-v", "1"])
+    raise SystemExit(main())

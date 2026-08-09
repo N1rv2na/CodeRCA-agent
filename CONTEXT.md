@@ -80,6 +80,10 @@ _Avoid_: Agent 可反复迭代的测试、公开测试
 
 ### 评测
 
+**Evaluation Ground Truth（评测真值）**:
+与 Agent 可见输入物理隔离、仅供 Outcome Evaluation 和人工核查使用的冻结任务答案。
+_Avoid_: Task Manifest、Agent Evidence、参考 Prompt
+
 **Outcome Evaluation（结果评测）**:
 检查 Diagnosis Run 的 Root Cause、候选补丁、Validation 和报告契约是否满足冻结任务的确定性预期。
 _Avoid_: Trajectory Evaluation、统计泛化结论
