@@ -1,0 +1,10 @@
+{
+  "defect_mechanism": "The Faulty Commit treats everyone=False as if no explicit everyone value were configured, so the later superusers branch returns True.",
+  "failure_manifestation": "The registered opaque probe expects False and observes True, producing an assertion mismatch.",
+  "propagation_path": "Flag.is_active delegates user evaluation to AbstractBaseFlag.is_active_for_user; the resulting True value activates a flag explicitly disabled for everyone.",
+  "reference_repair_behavior": "Restore the explicit tri-state guard everyone is not None before authenticated, staff, and superuser checks.",
+  "root_symbol": "AbstractBaseFlag.is_active_for_user",
+  "schema_version": "1",
+  "task_id": "crca-002-task-1",
+  "trigger_condition": "A persisted Flag has everyone=False and superusers=True; the request actor is a superuser."
+}

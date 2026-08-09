@@ -1,0 +1,13 @@
+{
+  "base_snapshot": "2ca9a74a90957c79322d6a9b063213258feff908",
+  "ci_log": "ci/task-1-failure.log",
+  "docker_image": "coderca/django-waffle-task-1:5.0.0-py311-v1",
+  "faulty_commit": "51e2424a0a6d8817291e5696b0cfbb1b3384a699",
+  "read_paths": ["waffle/"],
+  "repository_id": "django-waffle",
+  "schema_version": "1",
+  "task_id": "crca-002-task-1",
+  "test_command_id": "django_waffle_task_1_v1",
+  "tool_call_limit": 8,
+  "write_paths": ["waffle/models.py"]
+}

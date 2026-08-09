@@ -1,0 +1,7 @@
+# Frozen runtime for CRCA-002 Task 1 (Python 3.11, linux/amd64).
+Django==5.2.16 \
+    --hash=sha256:04f354bf9d807a86ad1a8392fe3808d362358a8eafc322848e0e43e59b24371d
+asgiref==3.9.2 \
+    --hash=sha256:0b61526596219d70396548fc003635056856dba5d0d086f86476f10b33c75960
+sqlparse==0.5.4 \
+    --hash=sha256:99a9f0314977b76d776a0fcb8554de91b9bb8a18560631d6bc48721d07023dcb

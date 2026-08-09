@@ -12,6 +12,7 @@ dependencies = ["pydantic>=2.8,<3"]
 
 [project.optional-dependencies]
 dev = [
+    "Django==5.2.16",
     "build>=1.2",
     "mypy>=1.11",
     "pytest>=8.0",
