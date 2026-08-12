@@ -44,7 +44,7 @@ M3 — Retrieval & Generalization Evidence
 
 ## Acceptance Criteria
 
-- [ ] reranker 在 CPU 上运行，不占用诊断模型 GPU。
+- [ ] reranker 在 CPU 上运行，不初始化 CUDA，也不要求本地诊断 GPU。
 - [ ] 相同索引、查询和配置产生相同的候选顺序。
 - [ ] 重排前后的候选、分数和固定配置可从运行产物审计。
 - [ ] 开启或关闭 reranker 时，`search_code` Tool Spec 与结果 Schema 不变。
@@ -82,5 +82,4 @@ M3 — Retrieval & Generalization Evidence
 ## Related ADRs
 
 - ADR-0007 — 两周 MVP 使用固定混合检索管线
-- ADR-0009 — 两周 MVP 只连接一个外部本地模型服务
-
+- ADR-0011 — 两周 MVP 使用单一 Gemini 云端模型 API

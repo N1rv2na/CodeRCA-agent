@@ -1,6 +1,6 @@
 # ADR-0009：两周 MVP 只连接一个外部本地模型服务
 
-- 状态：Accepted
+- 状态：Superseded by ADR-0011
 - 日期：2026-08-06
 - 取代：ADR-0006
 

@@ -14,7 +14,7 @@ M2 — Experiment & Patch Validation
 
 ## Goal
 
-使用真实本地模型对 Task 1 完成从 Task Manifest 到 Top-1 补丁 Validation 和最终 Root Cause Report 的端到端 Diagnosis Run。
+使用真实 Gemini 模型对 Task 1 完成从 Task Manifest 到 Top-1 补丁 Validation 和最终 Root Cause Report 的端到端 Diagnosis Run。
 
 ## Scope
 
@@ -24,7 +24,7 @@ M2 — Experiment & Patch Validation
 - 在临时 Docker 工作区应用一个候选补丁。
 - 运行注册测试与轻量静态检查，记录一次 Public Validation。
 - Validation 后直接 Finalizing，不进行第二轮补丁搜索。
-- 完成 Task 1 的真实本地模型端到端验收。
+- 完成 Task 1 的真实 Gemini 模型端到端验收。
 
 ## Out of Scope
 
@@ -44,7 +44,7 @@ M2 — Experiment & Patch Validation
 4. 在临时工作区应用补丁并运行注册测试与轻量静态检查。
 5. 扩展 Root Cause Report 和运行产物以包含补丁及 Validation。
 6. 增加 FakeModelProvider 完整闭环测试。
-7. 使用通过门禁的真实本地模型运行 Task 1 并保存验收记录。
+7. 使用通过门禁的真实 Gemini 模型运行 Task 1 并保存验收记录。
 
 ## Acceptance Criteria
 
@@ -54,7 +54,7 @@ M2 — Experiment & Patch Validation
 - [ ] 补丁只修改临时工作区，Faulty Commit 的原始工作副本保持不变。
 - [ ] 注册测试和轻量静态检查均被记录为 Public Validation 结果。
 - [ ] Validation 通过或失败后都直接生成最终报告，不启动第二轮补丁搜索。
-- [ ] Task 1 能以真实本地模型完成全链路运行，并保存模型响应、工具输出、补丁、Validation、事件和报告。
+- [ ] Task 1 能以真实 Gemini 模型完成全链路运行，并保存模型响应、工具输出、补丁、Validation、事件和报告。
 
 ## Testing Strategy
 
@@ -65,7 +65,7 @@ M2 — Experiment & Patch Validation
 
 ## Dependencies
 
-- CRCA-003 — 建立本地模型兼容性门禁
+- CRCA-003 — 建立 Gemini 模型兼容性门禁
 - CRCA-005 — 使用 Diff 与代码证据完成诊断循环
 - CRCA-006 — 在最小 Docker 边界中运行测试 Experiment
 
@@ -90,6 +90,5 @@ M2 — Experiment & Patch Validation
 - ADR-0001 — 使用自研显式诊断状态机
 - ADR-0002 — 使用结构化工具运行时且不实现 MCP
 - ADR-0008 — 两周 MVP 按 Diagnosis Run 目录保存记录
-- ADR-0009 — 两周 MVP 只连接一个外部本地模型服务
+- ADR-0011 — 两周 MVP 使用单一 Gemini 云端模型 API
 - ADR-0010 — 两周 MVP 采用最小 Docker 执行边界
-

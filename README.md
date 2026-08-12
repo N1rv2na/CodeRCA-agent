@@ -36,9 +36,9 @@ Agent 初始形成最多三个可证伪 Hypothesis。每次工具调用必须关
 - 由已知代码变更导致的业务逻辑回归；
 - 同仓库、同镜像和注册命令集合下的新 Diagnosis Task；
 - 三个分别强调 diff/代码、RAG 和测试 Experiment 的冻结任务；
-- 一个外部本地模型服务、本机 CLI 和串行 Diagnosis Run。
+- 一个固定的 Gemini 云端模型 API、本机 CLI 和串行 Diagnosis Run。
 
-以下能力延期：API 契约变化、配置错误、任意仓库兼容、完整检索消融、Baseline、LLM Judge、大规模隐藏集、FastAPI、Web UI、SQLite、云端模型、MCP 和生产级沙箱。
+以下能力延期：API 契约变化、配置错误、任意仓库兼容、完整检索消融、Baseline、LLM Judge、大规模隐藏集、FastAPI、Web UI、SQLite、本地模型与多模型适配、MCP 和生产级沙箱。
 
 三个冻结任务只用于证明原型闭环和工程回归，不用于声称统计显著性或跨仓库泛化能力。
 
@@ -47,7 +47,7 @@ Agent 初始形成最多三个可证伪 Hypothesis。每次工具调用必须关
 项目已完成 MVP Scope Reduction、领域建模、架构设计和 implementation-ready specification。当前提供 CRCA-001 的 Manifest-to-Run walking skeleton；完整诊断状态机和后续工具仍在规划中。
 
 - [Implementation specification issue](https://github.com/N1rv2na/CodeRCA-agent/issues/1)
-- 目标交付方式：源码安装 + 外部本地模型服务 + 固定 Docker 镜像 + CLI
+- 目标交付方式：源码安装 + Gemini Developer API + 固定 Docker 镜像 + CLI
 
 ## CRCA-001 本地运行
 
@@ -64,7 +64,7 @@ python -m venv .venv
 .venv/bin/coderca MANIFEST.json --runs-dir .coderca-runs
 ```
 
-命令会输出结构化终态摘要。每个 Diagnosis Run 目录包含 `manifest.json`、`events.jsonl` 和 `report.json`。当前使用确定性的 `FakeModelProvider`，不会调用真实模型服务，也不会执行仓库工具或补丁验证。
+命令会输出结构化终态摘要。每个 Diagnosis Run 目录包含 `manifest.json`、`events.jsonl` 和 `report.json`。当前使用确定性的 `FakeModelProvider`，不会调用 Gemini API，也不会执行仓库工具或补丁验证。
 
 ## 文档
 

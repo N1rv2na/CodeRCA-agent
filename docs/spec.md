@@ -4,6 +4,7 @@
 |---|---|
 | 状态 | Ready for implementation |
 | 日期 | 2026-08-06 |
+| 模型边界更新 | 2026-08-13（ADR-0011） |
 | 权威设计 | [CodeRCA 两周 MVP 设计](design.md) |
 | 产品范围 | 一个冻结 Django 仓库中的业务逻辑回归 |
 | 主要招聘信号 | Agent 工作流与 Tool Runtime |
@@ -17,7 +18,7 @@
 
 ## Solution
 
-CodeRCA 提供一个本机 CLI。用户提交符合 Schema 的 Task Manifest，描述同一冻结 Django 仓库中的 Faulty Commit、CI 日志、注册测试命令、Docker 镜像和执行边界。Diagnosis Application Service 创建 Diagnosis Run，并由最小显式状态机控制生命周期；诊断循环内部使用受约束 ReAct，让外部本地模型提出最多三个 Hypothesis、选择 Experiment、解释 Observation 和更新 Evidence。
+CodeRCA 提供一个本机 CLI。用户提交符合 Schema 的 Task Manifest，描述同一冻结 Django 仓库中的 Faulty Commit、CI 日志、注册测试命令、Docker 镜像和执行边界。Diagnosis Application Service 创建 Diagnosis Run，并由最小显式状态机控制生命周期；诊断循环内部使用受约束 ReAct，让固定的 Gemini 云端模型提出最多三个 Hypothesis、选择 Experiment、解释 Observation 和更新 Evidence。
 
 Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运行测试和应用补丁。代码检索使用固定的 Python AST 分块、BM25/向量混合和 CPU reranker 管线。每个工具调用必须关联一个活跃 Hypothesis、调用目的和预期 Observation。程序负责 Schema、权限、超时、错误、Evidence Score、八次工具预算和停止条件。
 
@@ -54,7 +55,7 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 22. 作为技术评审者，我希望看到 Hypothesis、Evidence、Experiment 和 Observation 的结构化状态，从而验证项目不是单次模型调用。
 23. 作为技术评审者，我希望看到不同冻结任务产生不同必要工具路径，从而验证诊断轨迹不是完全硬编码。
 24. 作为技术评审者，我希望每个工具共享 Tool Spec 契约，从而检查 Schema、权限、超时、错误和审计设计。
-25. 作为技术评审者，我希望模型只负责提出决策而程序维护不变量，从而理解系统如何约束本地小模型。
+25. 作为技术评审者，我希望模型只负责提出决策而程序维护不变量，从而理解系统如何约束真实模型输出。
 26. 作为技术评审者，我希望查看每一步重新组装的有界状态快照，从而评估 Context Engineering 是否避免无限历史追加。
 27. 作为技术评审者，我希望 `search_code` 返回 AST 符号元数据和排序结果，从而检查代码 RAG 如何支持 Root Cause 定位。
 28. 作为技术评审者，我希望检索实现明确采用固定混合管线，从而不会把未经评测的配置选择描述为可量化增益。
@@ -66,8 +67,8 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 ### 项目开发者
 
 33. 作为项目开发者，我希望 CLI 和 Evaluation Harness 调用同一个 Diagnosis Application Service，从而只有一个最高端到端测试缝。
-34. 作为项目开发者，我希望使用 FakeModelProvider 驱动确定性 Diagnosis Run，从而在默认 CI 中测试真实状态机而不依赖 GPU。
-35. 作为项目开发者，我希望不同生命周期阶段使用各自的小型 Schema，从而提高本地模型结构输出的稳定性。
+34. 作为项目开发者，我希望使用 FakeModelProvider 驱动确定性 Diagnosis Run，从而在默认 CI 中测试真实状态机而不调用云端 API。
+35. 作为项目开发者，我希望不同生命周期阶段使用各自的小型 Schema，从而提高 Gemini 结构输出的稳定性。
 36. 作为项目开发者，我希望第一次 Schema Failure 后只允许一次明确纠错，从而避免模糊解析和无限重试。
 37. 作为项目开发者，我希望状态机拒绝非法阶段转换，从而保证工具、Evidence 和补丁只在合法阶段出现。
 38. 作为项目开发者，我希望初始 Hypothesis 数量限制为一至三个，从而保持候选竞争有界。
@@ -81,8 +82,8 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 46. 作为项目开发者，我希望路径校验拒绝仓库外读取和非允许源码修改，从而保护宿主文件与任务基础设施。
 47. 作为项目开发者，我希望 ModelProvider 只依赖一个固定 HTTP 协议，从而不把模型加载和量化耦合进 Agent 核心。
 48. 作为项目开发者，我希望在正式实现前用最小探针验证真实模型的 Schema、工具参数、Evidence 更新和补丁能力，从而降低末期集成风险。
-49. 作为项目开发者，我希望诊断模型独占 GPU，从而避免与 embedding 或 reranker 争抢 8 GB 显存。
-50. 作为项目开发者，我希望 embedding 在索引阶段预计算且 reranker 在 CPU 运行，从而降低运行期 GPU 风险。
+49. 作为项目开发者，我希望 `GEMINI_API_KEY` 只存在于宿主环境且不进入 Prompt、运行产物、工具或 Docker，从而保持凭证边界可检查。
+50. 作为项目开发者，我希望 embedding 在索引阶段预计算且 reranker 在 CPU 运行，从而让本地检索不依赖诊断模型 GPU。
 51. 作为项目开发者，我希望索引器按函数、方法和类建立 AST 语义块，从而保留代码结构和 Root Symbol 元数据。
 52. 作为项目开发者，我希望源码变化时整库重建索引，从而避免实现增量索引和缓存迁移。
 53. 作为项目开发者，我希望每次模型调用从结构化状态重新组装上下文，从而避免 Prompt 随历史无限增长。
@@ -111,10 +112,10 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 70. 作为 Evaluation 执行者，我希望检查只有 Top-1 进入补丁 Validation，从而保证缩减后的补丁策略未被破坏。
 71. 作为 Evaluation 执行者，我希望输出三个任务的逐任务结果，从而避免小样本百分比造成误导。
 72. 作为 Evaluation 执行者，我希望由作者人工核查因果机制，从而不引入额外 LLM Judge。
-73. 作为本地操作者，我希望启动前检查外部模型服务与模型是否可用，从而在 Diagnosis Run 前发现环境问题。
+73. 作为本地操作者，我希望启动前检查 Gemini 凭证、服务与冻结模型是否可用，从而在 Diagnosis Run 前发现环境问题。
 74. 作为本地操作者，我希望只构建一个冻结的 Django Docker 镜像，从而控制环境和构建成本。
 75. 作为本地操作者，我希望容器默认禁网、只运行注册命令并设置超时，从而降低正常测试的意外副作用。
-76. 作为本地操作者，我希望模型凭证和模型服务不进入测试容器，从而保持执行边界清晰。
+76. 作为本地操作者，我希望 `GEMINI_API_KEY` 和云端模型流量不进入测试容器，从而保持执行边界清晰。
 
 ## Implementation Decisions
 
@@ -143,14 +144,14 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 23. **路径权限**：只读工具只能访问 Manifest 允许的仓库范围；补丁只能修改允许的业务源码，不能修改测试、依赖锁、任务定义或 Evaluation 数据。
 24. **上下文快照**：每次模型请求重新组装 Diagnosis Task 摘要、最多三个 Hypothesis、Evidence 摘要、最近 Observation、剩余预算和少量必要原文。
 25. **上下文外数据**：完整日志、代码、测试输出和模型响应保存到运行目录；MVP 不实现自动摘要、长期记忆、按需 Artifact 召回或历史重放。
-26. **ModelProvider**：只实现一个固定 HTTP ModelProvider，连接用户预先启动的外部本地推理服务。CodeRCA 不加载模型或管理量化、CUDA 和显存。
-27. **模型能力探针**：主体开发早期必须验证候选模型能输出阶段 Schema、合法工具参数、Evidence 更新和可应用的小型 Python 补丁。
-28. **GPU 分配**：诊断模型独占 GPU。代码 embedding 在索引阶段预计算，reranker 在 CPU 上执行小候选集重排。
+26. **ModelProvider**：只实现一个固定的 Gemini ModelProvider，通过 Gemini Developer API 的 OpenAI-compatible HTTPS 接口调用 `gemini-3.6-flash`，基础地址固定为 `https://generativelanguage.googleapis.com/v1beta/openai/`。CodeRCA 不实现本地模型或其他云端后端，也不加载模型或管理量化、CUDA 和显存。`thought_signature` 等 Gemini 扩展字段只作为不透明 Provider 元数据保留并按协议回传，不进入 Evidence、Observation 或报告因果字段。
+27. **模型能力探针**：主体开发早期必须验证冻结 Gemini 模型能输出阶段 Schema、合法工具参数、Evidence 更新和可应用的小型 Python 补丁；真实探针只显式运行，不进入默认 CI。
+28. **云端数据与本地计算边界**：`GEMINI_API_KEY` 只从宿主环境读取，且不得进入 Prompt、Task Manifest、运行产物、日志、SQLite、Git、Tool 参数或 Docker。真实请求只允许发送冻结公开基准仓库的有界上下文；私有或雇主代码不受支持。代码 embedding 在索引阶段预计算，reranker 在 CPU 上执行，CodeRCA 不要求本地诊断 GPU。
 29. **RAG 索引**：只索引 Faulty Commit 快照。以 Python AST 函数、方法和类为主要语义单元，保存路径、符号、父类、行区间和源码。
 30. **索引更新**：仓库路径和排除规则由配置提供；源码变化时整库重建，不实现增量索引、缓存迁移或任意仓库质量保证。
 31. **固定检索管线**：`search_code` 使用 BM25 与向量召回、固定融合、CPU reranker 和固定 Top-K。Agent 不选择算法，MVP 不实现消融、参数搜索或在线调参。
 32. **检索查询**：查询可以使用异常类型、消息、堆栈、失败测试、diff 符号和 Hypothesis 语义描述；动态查询必须关联对应 Hypothesis。
-33. **Docker 边界**：MVP 使用一个预构建 Django 镜像和临时工作区，默认禁网，只执行注册命令，设置统一超时且不挂载模型凭证。
+33. **Docker 边界**：MVP 使用一个预构建 Django 镜像和临时工作区，默认禁网，只执行注册命令，设置统一超时且不挂载 `GEMINI_API_KEY` 或其他模型凭证；Gemini 请求由宿主 Agent 进程发起。
 34. **安全声明**：Docker 边界只降低正常测试的意外副作用，不承诺生产级沙箱、恶意代码防御、容器逃逸防护或跨平台一致性。
 35. **Validation 流程**：Top-1 补丁通过路径校验后应用到临时工作区，再运行注册测试与轻量静态检查；结果成为 Evidence 和报告字段。
 36. **运行记录**：每个 Diagnosis Run 使用独立目录保存 Manifest 快照、JSONL 事件、JSON 报告、模型响应、工具输出、补丁和 Validation 结果。
@@ -160,9 +161,9 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 40. **冻结任务**：三个任务共享仓库、镜像和索引流程，但分别强制使用 diff/代码、RAG 和测试 Experiment 证据路径。Task 3 在 Prompt、Schema 和工具策略基本冻结后运行。
 41. **Evaluation**：Outcome Evaluation 检查 Root Symbol、补丁可应用性、Validation 和报告契约；Trajectory Evaluation 检查 Hypothesis 绑定、Experiment 目的、Evidence 引用、预算、停止和 Top-1 补丁不变量。
 42. **结果表达**：Evaluation 输出逐任务结果，不调用 LLM Judge，不与 Baseline 比较，不汇总具有统计或泛化暗示的成功率；因果机制由作者人工核查。
-43. **交付方式**：MVP 通过源码、本地 Python 环境、外部本地模型服务、一个 Docker 镜像和 CLI 交付，不发布 PyPI、Compose 或托管服务。
+43. **交付方式**：MVP 通过源码、本地 Python 环境、Gemini Developer API、一个 Docker 镜像和 CLI 交付，不发布 PyPI、Compose 或托管服务。
 44. **第七天降级**：如果第七天仍未完成真实纵向闭环，依次删除 reranker、将任务从三个减少到两个、将报告从 Top-3 减少到 Top-1，同时保留内部多个 Hypothesis。
-45. **不可削减核心**：最小状态机、五工具协议、真实本地模型、一个 Docker Experiment 和 Top-1 补丁 Validation 不得因进度被替换为模拟实现。
+45. **不可削减核心**：最小状态机、五工具协议、真实 Gemini 模型调用、一个 Docker Experiment 和 Top-1 补丁 Validation 不得因进度被替换为模拟实现。
 
 ## Testing Decisions
 
@@ -171,7 +172,7 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 3. **适配器测试**：CLI 与 Evaluation Harness 通过同一应用服务测试，不各自复制完整 Agent 端到端体系。
 4. **测试先例**：仓库当前没有实现或测试文件，因此不存在可复用测试先例；本 specification 建立应用服务主缝和分层测试边界。
 5. **FakeModelProvider 闭环**：至少一个确定性测试使用 FakeModelProvider 驱动 Manifest 读取、Hypothesis、工具调用、Evidence、补丁、Validation、报告和运行事件的完整纵向路径。
-6. **真实模型隔离**：默认 CI 不启动真实模型、不需要 GPU 且不联网。真实模型探针和三个 Agent Evaluation 任务必须显式运行。
+6. **真实模型隔离**：默认 CI 不读取 `GEMINI_API_KEY`、不调用 Gemini、不需要 GPU 且不联网。真实模型探针和三个 Agent Evaluation 任务必须显式运行。
 7. **状态机测试**：验证合法与非法阶段转换、终态不可继续执行、不可恢复错误进入 Finalizing，以及真实工具不会在错误阶段调用。
 8. **Hypothesis 测试**：验证一至三个初始候选、超过三个被拒绝、候选不动态补充或复活，以及 rejected 候选不能再被选择。
 9. **Evidence Score 测试**：验证实验、直接证据、diff 和检索相似性的单调强度关系，Contradicting Evidence 扣分，并验证分数不作为概率输出。
@@ -210,7 +211,7 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 - 自动摘要、长期记忆、Artifact 召回和运行回放；
 - SQLite、内容寻址 Artifact、跨运行去重、崩溃恢复和后台 Worker；
 - FastAPI、Web UI、静态 HTML 报告和远程协作；
-- 云端模型、多真实模型适配、模型加载、量化和 GPU 管理；
+- 本地模型、其他云端提供商、多真实模型适配、自动路由、模型加载、量化和 GPU 管理；
 - MCP、任意 Shell、任意网络访问和生产工具；
 - 生产级沙箱、恶意代码防御、容器逃逸防护和跨平台安全保证；
 - 自动修改真实仓库、推送分支或创建 PR；
@@ -219,8 +220,8 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 ## Further Notes
 
 - 实现、测试、事件和报告必须使用 `CONTEXT.md` 中的 Diagnosis Task、Task Manifest、Diagnosis Run、Root Cause、Root Cause Candidate、Root Symbol、Hypothesis、Evidence、Experiment、Observation、Validation、Outcome Evaluation 和 Trajectory Evaluation 等规范术语。
-- 当前有效 ADR 为显式状态机、结构化 Tool Runtime、固定混合检索管线、按运行目录持久化、单一本地模型服务和最小 Docker 执行边界。旧的检索消融、SQLite、云端兜底和完整容器控制 ADR 已被取代。
-- 具体开源 Django 仓库、本地诊断模型、HTTP 推理服务、embedding 模型、融合权重、reranker、候选数和 Top-K 仍需在实现早期冻结；选择不得扩大本 specification 的产品范围。
-- 模型探针是风险门槛，不是 Benchmark。若候选本地模型无法满足阶段 Schema、工具参数、Evidence 更新和小型补丁要求，应在主体开发早期更换候选，而不是在末期重写 Agent 协议。
+- 当前有效 ADR 为显式状态机、结构化 Tool Runtime、固定混合检索管线、按运行目录持久化、单一 Gemini 云端模型 API 和最小 Docker 执行边界。旧的检索消融、SQLite、本地模型、云端兜底和完整容器控制 ADR 已被取代。
+- 具体开源 Django 仓库、embedding 模型、融合权重、reranker、候选数和 Top-K 仍需在实现早期冻结；真实诊断模型固定为 `gemini-3.6-flash`，选择不得扩大本 specification 的产品范围。
+- 模型探针是风险门槛，不是 Benchmark。若冻结 Gemini 模型无法满足阶段 Schema、工具参数、Evidence 更新和小型补丁要求，应阻断真实运行并通过新 ADR 重新决策，而不是在末期加入模糊解析或静默回退。
 - MVP 的合理简历表述是“在一个冻结 Django 项目上实现可复用的 Diagnosis Task 工作流，并以三个业务逻辑回归任务验证动态工具选择、Evidence 更新和补丁 Validation”。不得表述为能够泛化诊断任意 Python/Django 项目。
 - 在 GitHub issue tracker 中，本 specification 应使用 `ready-for-agent` 标签。后续 ticket 拆解必须以本文件和权威设计为准，不得从旧研究级 specification 恢复已延期能力。

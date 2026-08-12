@@ -56,7 +56,7 @@ Evaluation Harness 作为应用服务适配器读取 Ground Truth 和 Diagnosis 
 - [ ] 输出按 Task 1、Task 2，以及完整目标中的 Task 3 逐项列出，不计算成功率。
 - [ ] 补丁通过不会覆盖 Root Symbol 未命中或因果核查失败。
 - [ ] 人工核查分别记录触发条件、缺陷位置、传播路径和失败表现。
-- [ ] 默认测试无需 GPU 和网络；真实模型/Docker Evaluation 只能显式启动。
+- [ ] 默认测试无需 `GEMINI_API_KEY`、GPU 和网络；真实模型/Docker Evaluation 只能显式启动。
 - [ ] 本地验收说明涵盖模型 preflight、索引、诊断、评测、运行产物和已知失败。
 - [ ] 如果采用 Day-7 降级，文档、任务集和报告合同同步反映实际范围。
 
@@ -106,6 +106,5 @@ Day-7 降级路径：
 - ADR-0002 — 使用结构化工具运行时且不实现 MCP
 - ADR-0007 — 两周 MVP 使用固定混合检索管线
 - ADR-0008 — 两周 MVP 按 Diagnosis Run 目录保存记录
-- ADR-0009 — 两周 MVP 只连接一个外部本地模型服务
+- ADR-0011 — 两周 MVP 使用单一 Gemini 云端模型 API
 - ADR-0010 — 两周 MVP 采用最小 Docker 执行边界
-
