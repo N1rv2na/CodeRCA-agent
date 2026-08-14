@@ -3,16 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from coderca.application import DiagnosisApplicationService
 from coderca.contracts import TaskManifest
-from coderca.model_provider import (
-    FakeModelProvider,
-    GeminiGateRequiredError,
-    GeminiModelProvider,
-    TransportResponse,
-)
+from coderca.model_provider import FakeModelProvider
 from coderca.run_store import RunStore
 
 
@@ -58,23 +51,3 @@ def test_two_diagnosis_runs_use_distinct_directories(
     assert first.run_directory != second.run_directory
     assert first.run_directory.is_dir()
     assert second.run_directory.is_dir()
-
-
-def test_gemini_gate_failure_prevents_run_creation(
-    tmp_path: Path, valid_manifest_data: dict[str, object]
-) -> None:
-    class UnusedTransport:
-        def request(self, request: object) -> TransportResponse:
-            raise AssertionError("transport must not run before the gate passes")
-
-    manifest = TaskManifest.model_validate(valid_manifest_data)
-    runs_directory = tmp_path / "runs"
-    service = DiagnosisApplicationService(
-        provider=GeminiModelProvider(transport=UnusedTransport()),
-        run_store=RunStore(runs_directory),
-    )
-
-    with pytest.raises(GeminiGateRequiredError):
-        service.start_diagnosis(manifest)
-
-    assert not runs_directory.exists()

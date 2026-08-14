@@ -21,7 +21,6 @@ dev = [
 
 [project.scripts]
 coderca = "coderca.cli:main"
-coderca-model-gate = "coderca.model_gate_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

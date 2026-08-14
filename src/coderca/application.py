@@ -21,7 +21,6 @@ class DiagnosisApplicationService:
         self.run_store = run_store
 
     def start_diagnosis(self, manifest: TaskManifest) -> DiagnosisRunResult:
-        self.provider.ensure_ready()
         run_id = str(uuid4())
         artifacts = self.run_store.create_run(run_id)
         self.run_store.write_manifest(artifacts, manifest)
