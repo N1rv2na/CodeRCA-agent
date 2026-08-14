@@ -86,4 +86,4 @@ CodeRCA 的核心招聘信号不是自由对话式 ReAct，而是由程序维护
 
 - ADR-0001 — 使用自研显式诊断状态机
 - ADR-0008 — 两周 MVP 按 Diagnosis Run 目录保存记录
-- ADR-0012 — 使用可配置的 OpenAI-compatible 云端模型 Provider
+- ADR-0013 — 本地 Schema 校验与显式 Structured Output Mode

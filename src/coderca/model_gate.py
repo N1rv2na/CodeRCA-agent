@@ -17,6 +17,7 @@ from .model_provider import (
     ModelFailureCategory,
     ModelProviderError,
     StructuredModelResponse,
+    StructuredOutputMode,
 )
 
 
@@ -72,8 +73,8 @@ class PythonPatchProbe(ContractModel):
 class GateRequestConfiguration(ContractModel):
     stream: Literal[False] = False
     temperature: Literal[0] = 0
-    response_format_type: Literal["json_schema"] = "json_schema"
-    strict: Literal[True] = True
+    response_format_type: Literal["json_schema"] | None = None
+    strict: Literal[True] | None = None
 
 
 class ProbeResult(ContractModel):
@@ -84,9 +85,10 @@ class ProbeResult(ContractModel):
 
 
 class ModelCompatibilityReport(ContractModel):
-    schema_version: Literal["1"] = "1"
+    schema_version: Literal["2"] = "2"
     endpoint: NonEmptyString
     model_id: NonEmptyString
+    structured_output_mode: StructuredOutputMode
     request_configuration: GateRequestConfiguration
     compatible: bool
     failure_category: ModelFailureCategory | None = None
@@ -143,8 +145,8 @@ def run_model_compatibility_gate(
                 name="preflight",
                 system_prompt=_SYSTEM_PROMPT,
                 user_prompt=(
-                    "Confirm this configured model can return a strict structured "
-                    "response. Return status 'ok' and model_id "
+                    "Confirm this configured model can return a locally validated "
+                    "structured response. Return status 'ok' and model_id "
                     f"'{configuration.model_id}'."
                 ),
             ),
@@ -240,9 +242,7 @@ def run_model_compatibility_gate(
                     definition.name,
                     original_response,
                 )
-                artifact_reference = str(
-                    artifact.relative_to(output_directory)
-                )
+                artifact_reference = str(artifact.relative_to(output_directory))
             results.append(
                 ProbeResult(
                     name=definition.name,
@@ -256,7 +256,8 @@ def run_model_compatibility_gate(
     report = ModelCompatibilityReport(
         endpoint=_redacted_endpoint(configuration.base_url),
         model_id=configuration.model_id,
-        request_configuration=GateRequestConfiguration(),
+        structured_output_mode=configuration.structured_output_mode,
+        request_configuration=_gate_request_configuration(configuration),
         compatible=failure_category is None and len(results) == len(probes),
         failure_category=failure_category,
         probes=results,
@@ -267,6 +268,14 @@ def run_model_compatibility_gate(
         encoding="utf-8",
     )
     return report
+
+
+def _gate_request_configuration(
+    configuration: ModelConfiguration,
+) -> GateRequestConfiguration:
+    if configuration.structured_output_mode is StructuredOutputMode.NATIVE_JSON_SCHEMA:
+        return GateRequestConfiguration(response_format_type="json_schema", strict=True)
+    return GateRequestConfiguration()
 
 
 def _validate_preflight(response: BaseModel, expected_model_id: str) -> None:
@@ -322,9 +331,11 @@ def _evaluate_statements(
                 return None
             return _evaluate_expression(statement.value, environment)
         if isinstance(statement, ast.If):
-            branch = statement.body if _evaluate_expression(
-                statement.test, environment
-            ) else statement.orelse
+            branch = (
+                statement.body
+                if _evaluate_expression(statement.test, environment)
+                else statement.orelse
+            )
             result = _evaluate_statements(branch, environment)
             if result is not _NO_RETURN:
                 return result
@@ -341,9 +352,11 @@ def _evaluate_expression(
     if isinstance(expression, ast.Constant) and expression.value is None:
         return None
     if isinstance(expression, ast.IfExp):
-        branch = expression.body if _evaluate_expression(
-            expression.test, environment
-        ) else expression.orelse
+        branch = (
+            expression.body
+            if _evaluate_expression(expression.test, environment)
+            else expression.orelse
+        )
         return _evaluate_expression(branch, environment)
     if (
         isinstance(expression, ast.Compare)

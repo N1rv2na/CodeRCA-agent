@@ -25,8 +25,16 @@ _Avoid_: 修复版本、当前最新版
 ### 模型边界
 
 **Model Configuration（模型配置）**:
-一次真实模型运行使用的 OpenAI-compatible Endpoint、Model ID 和关键生成参数组合；API Key 不属于可持久化配置。
+一次真实模型运行使用的 OpenAI-compatible Endpoint、Model ID、Structured Output Mode、Request Extensions 和关键生成参数组合；API Key 不属于可持久化配置。
 _Avoid_: Provider 实例、API Key、自动模型路由
+
+**Request Extensions（请求扩展）**:
+Model Configuration 显式提供、仅在 HTTP 请求边界附加的 Endpoint 专属 JSON 参数；不得覆盖 CodeRCA 控制的核心请求字段，也不得根据 Endpoint 或 Model ID 自动推断。
+_Avoid_: 任意 Provider 插件、核心字段覆盖、凭证、响应修复规则
+
+**Structured Output Mode（结构化输出模式）**:
+Model Configuration 显式选择的结构化响应请求方式；取值仅为优先使用 Provider 原生严格 Schema 的 `native_json_schema`，或要求原始 JSON 文本的 `json_text`。两种模式都必须经过本地解析与 Pydantic 校验。
+_Avoid_: 根据 Provider 名称自动探测、跳过本地校验、模糊 JSON 修复
 
 **Model Compatibility Gate（模型兼容性门禁）**:
 显式检查 Model Configuration 是否满足 CodeRCA 最低结构化交互合同的工程验收。

@@ -19,5 +19,6 @@ dist/
 
 # Local CodeRCA runs and agent scratch state
 .coderca-runs/
+.coderca-model-gate/
 .superpowers/
 /docs/superpowers/

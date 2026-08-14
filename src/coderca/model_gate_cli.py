@@ -74,9 +74,7 @@ def main(
                 "compatible": report.compatible,
                 "failure_category": report.failure_category,
                 "model": report.model_id,
-                "model_compatibility_report": str(
-                    output_directory / "model-gate.json"
-                ),
+                "model_compatibility_report": str(output_directory / "model-gate.json"),
             },
             sort_keys=True,
         )

@@ -143,8 +143,8 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 23. **路径权限**：只读工具只能访问 Manifest 允许的仓库范围；补丁只能修改允许的业务源码，不能修改测试、依赖锁、任务定义或 Evaluation 数据。
 24. **上下文快照**：每次模型请求重新组装 Diagnosis Task 摘要、最多三个 Hypothesis、Evidence 摘要、最近 Observation、剩余预算和少量必要原文。
 25. **上下文外数据**：完整日志、代码、测试输出和模型响应保存到运行目录；MVP 不实现自动摘要、长期记忆、按需 Artifact 召回或历史重放。
-26. **ModelProvider**：只实现一个 OpenAI-compatible HTTP ModelProvider。每次进程运行通过 `CODERCA_MODEL_BASE_URL`、`CODERCA_MODEL_ID` 和 `CODERCA_MODEL_API_KEY` 配置一个 Chat Completions 端点和模型；请求必须非流式、`temperature=0`、使用 strict JSON Schema，并通过本地 Pydantic 校验。
-27. **Model Compatibility Gate**：显式命令最多执行一次预检和四个一次性能力探针，覆盖阶段 Schema、合法工具参数、Evidence 更新和可应用的小型 Python 补丁，输出脱敏 Model Compatibility Report。它是建议性兼容检查，不授权或阻止 Diagnosis Run。
+26. **ModelProvider**：只实现一个 OpenAI-compatible HTTP ModelProvider。每次进程运行通过 `CODERCA_MODEL_BASE_URL`、`CODERCA_MODEL_ID`、`CODERCA_MODEL_API_KEY` 和 `CODERCA_MODEL_STRUCTURED_OUTPUT_MODE` 配置一个 Chat Completions 端点、模型和显式 Structured Output Mode；可选 `CODERCA_MODEL_REQUEST_EXTENSIONS` 必须是 JSON object，缺失或空值视为 `{}`。请求必须非流式、`temperature=0`；`native_json_schema` 使用 Provider 原生 strict JSON Schema，`json_text` 不发送 `response_format`。Request Extensions 只能在标准 payload 构造后附加，不得覆盖 `model`、`messages`、`stream`、`temperature` 或 `response_format`，也不得按 Endpoint、Model ID 或品牌推断。两种模式都必须直接解析 `message.content` 并通过本地 Pydantic 校验，不做 fence/thinking 清理、子串提取、字段猜测或模糊修复。
+27. **Model Compatibility Gate**：显式命令在当前 Structured Output Mode 下最多执行一次预检和四个相同的一次性能力探针，覆盖阶段 Schema、合法工具参数、Evidence 更新和可应用的小型 Python 补丁，输出记录 mode 的脱敏 Model Compatibility Report。它 fail-fast，是建议性兼容检查，不授权或阻止 Diagnosis Run，也不自动探测或切换 mode。
 28. **计算边界**：诊断模型由云端 API 托管。代码 embedding 在索引阶段预计算，reranker 在本机 CPU 上执行小候选集重排；MVP 不管理诊断模型 GPU、量化或加载。
 29. **RAG 索引**：只索引 Faulty Commit 快照。以 Python AST 函数、方法和类为主要语义单元，保存路径、符号、父类、行区间和源码。
 30. **索引更新**：仓库路径和排除规则由配置提供；源码变化时整库重建，不实现增量索引、缓存迁移或任意仓库质量保证。
@@ -219,8 +219,8 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 ## Further Notes
 
 - 实现、测试、事件和报告必须使用 `CONTEXT.md` 中的 Diagnosis Task、Task Manifest、Diagnosis Run、Root Cause、Root Cause Candidate、Root Symbol、Hypothesis、Evidence、Experiment、Observation、Validation、Outcome Evaluation 和 Trajectory Evaluation 等规范术语。
-- 当前有效 ADR 为显式状态机、结构化 Tool Runtime、固定混合检索管线、按运行目录持久化、可配置的单一 OpenAI-compatible 云端 ModelProvider 和最小 Docker 执行边界。旧的检索消融、SQLite、模型兜底和完整容器控制 ADR 已被取代。
+- 当前有效 ADR 为显式状态机、结构化 Tool Runtime、固定混合检索管线、按运行目录持久化、使用本地 Schema 校验与显式 Structured Output Mode 的单一 OpenAI-compatible 云端 ModelProvider，以及最小 Docker 执行边界。旧的检索消融、SQLite、模型兜底、原生 strict Schema 通用最低要求和完整容器控制 ADR 已被取代。
 - 具体开源 Django 仓库、运行时 Model Configuration、embedding 模型、融合权重、reranker、候选数和 Top-K 仍需在实现早期冻结；具体云端模型由操作者选择，不写死在本 specification 中，且选择不得扩大产品范围。
-- Model Compatibility Gate 是兼容性风险检查，不是 Benchmark 或 Diagnosis Run 授权。若已配置模型无法满足阶段 Schema、工具参数、Evidence 更新和小型补丁要求，操作者应更换 Model Configuration，而不是在末期重写 Agent 协议。
+- Model Compatibility Gate 是兼容性风险检查，不是 Benchmark 或 Diagnosis Run 授权。若已配置模型在显式 Structured Output Mode 下无法产生通过本地 Schema 校验的阶段对象、工具参数、Evidence 更新和小型补丁，操作者应更换 Model Configuration，而不是增加 Provider 品牌分支或模糊输出修复。
 - MVP 的合理简历表述是“在一个冻结 Django 项目上实现可复用的 Diagnosis Task 工作流，并以三个业务逻辑回归任务验证动态工具选择、Evidence 更新和补丁 Validation”。不得表述为能够泛化诊断任意 Python/Django 项目。
 - 在 GitHub issue tracker 中，本 specification 应使用 `ready-for-agent` 标签。后续 ticket 拆解必须以本文件和权威设计为准，不得从旧研究级 specification 恢复已延期能力。

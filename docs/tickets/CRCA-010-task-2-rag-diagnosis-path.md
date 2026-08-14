@@ -95,5 +95,5 @@ Day-7 降级路径：
 
 - ADR-0007 — 两周 MVP 使用固定混合检索管线
 - ADR-0008 — 两周 MVP 按 Diagnosis Run 目录保存记录
-- ADR-0012 — 使用可配置的 OpenAI-compatible 云端模型 Provider
+- ADR-0013 — 本地 Schema 校验与显式 Structured Output Mode
 - ADR-0010 — 两周 MVP 采用最小 Docker 执行边界

@@ -1,6 +1,6 @@
 # ADR-0012：使用单个可配置的 OpenAI-compatible 云端模型
 
-- 状态：Accepted
+- 状态：Superseded by ADR-0013
 - 日期：2026-08-14
 - 取代：ADR-0009、ADR-0011
 

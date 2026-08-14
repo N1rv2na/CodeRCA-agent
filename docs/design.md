@@ -244,9 +244,11 @@ Contradicting Evidence 使用对应负权重。具体整数在实现前冻结并
 
 ### 8.2 ModelProvider
 
-CodeRCA 只实现一个 OpenAI-compatible HTTP ModelProvider。每次进程运行由操作者通过 `CODERCA_MODEL_BASE_URL`、`CODERCA_MODEL_ID` 和 `CODERCA_MODEL_API_KEY` 配置一个云端 Chat Completions 端点和模型；Agent 不进行模型发现、自动选择、路由或回退。
+CodeRCA 只实现一个 OpenAI-compatible HTTP ModelProvider。每次进程运行由操作者通过 `CODERCA_MODEL_BASE_URL`、`CODERCA_MODEL_ID`、`CODERCA_MODEL_API_KEY` 和 `CODERCA_MODEL_STRUCTURED_OUTPUT_MODE` 配置一个云端 Chat Completions 端点、模型和 Structured Output Mode；可选的 `CODERCA_MODEL_REQUEST_EXTENSIONS` JSON object 显式提供少量 Endpoint 专属 invocation 参数。Agent 不进行模型发现、自动选择、路由或回退。
 
-真实请求固定使用非流式调用、`temperature=0`、`response_format.type=json_schema` 和 `json_schema.strict=true`，响应还必须通过本地 Pydantic Schema 校验。Agent 不依赖服务专属 Tool Calling 或原生厂商 SDK。
+真实请求固定使用非流式调用和 `temperature=0`。`native_json_schema` 发送 `response_format.type=json_schema` 与 `strict=true`；`json_text` 不发送 `response_format`，而在 Prompt 中要求只返回满足阶段 Schema 的原始 JSON。模式必须显式配置，不根据 Endpoint、Model ID 或供应商品牌推断。
+
+无论使用哪种模式，`message.content` 都必须直接通过 `json.loads` 和本地 Pydantic Schema 校验，成功前不得进入 Agent State。Provider 不剥离 Markdown fence 或 `<think>`，不提取 JSON 子串，不猜测字段，也不模糊修复非法结构。Request Extensions 在标准 payload 构造后合并，禁止覆盖 `model`、`messages`、`stream`、`temperature` 和 `response_format`，不按 Endpoint、Model ID 或品牌推断，且其值不写入兼容性报告；响应中回显的 extension 字符串值在进入 Artifact 前脱敏。CRCA-003 对非法结果立即失败，不实现自动 retry、任意未校验 `extra_body`、服务专属 Tool Calling 或原生厂商 SDK。
 
 Model Compatibility Gate 是显式运行的兼容性检查，不是 Diagnosis Run 的授权门禁，也不是模型 Benchmark。它最多发起一次预检和以下四个一次性探针：
 
@@ -255,7 +257,7 @@ Model Compatibility Gate 是显式运行的兼容性检查，不是 Diagnosis Ru
 - 根据 Observation 更新 Evidence；
 - 生成可应用的小型 Python 补丁。
 
-门禁生成脱敏的 Model Compatibility Report；失败返回非零退出码，但 Diagnosis Run 只读取当前 Model Configuration，不隐式读取门禁报告或阻止运行。自动化测试使用 FakeModelProvider。MVP 不实现本地模型后端、原生厂商 SDK、多真实后端、路由、回退或录制轨迹回放。
+两种 Structured Output Mode 运行相同探针。门禁生成记录 mode 的脱敏 Model Compatibility Report；失败返回非零退出码，但 Diagnosis Run 只读取当前 Model Configuration，不隐式读取门禁报告、自动切换 mode 或阻止运行。自动化测试使用 FakeModelProvider。MVP 不实现本地模型后端、原生厂商 SDK、多真实后端、路由、回退或录制轨迹回放。
 
 ### 8.3 云端数据与凭证边界
 
@@ -482,7 +484,7 @@ Evaluation 不调用 LLM Judge，不与 Baseline 比较，不汇总具有泛化�
 
 | 风险 | 影响 | 控制 |
 |---|---|---|
-| 云端模型不支持严格 Schema 或产生协议差异 | Agent 无法真实闭环 | 早期运行通用兼容性门禁；阶段小 Schema；本地 Pydantic 校验 |
+| 已配置模式无法稳定产生本地 Schema 有效输出 | Agent 无法真实闭环 | 早期按 mode 运行兼容性门禁；优先 native schema；阶段小 Schema；本地 Pydantic 校验 |
 | 三个任务仍过度定制 | 招聘证据被质疑 | 三种不同必要路径；Task 3 延后运行；公开逐任务轨迹 |
 | 固定 RAG 管线环境复杂 | 首个闭环延期 | Task 1 可先用最小搜索接缝；第七天先删除 reranker |
 | Docker 在 WSL/开发机行为不一致 | Validation 不稳定 | 单镜像、单仓库、注册命令和统一超时 |
@@ -495,7 +497,7 @@ Evaluation 不调用 LLM Judge，不与 Baseline 比较，不汇总具有泛化�
 - [ADR-0002：结构化 Tool Runtime 且不实现 MCP](adr/0002-typed-tool-runtime.md)
 - [ADR-0007：固定混合检索管线](adr/0007-fixed-retrieval-pipeline.md)，取代 ADR-0003
 - [ADR-0008：按运行目录持久化](adr/0008-run-directory-persistence.md)，取代 ADR-0005
-- [ADR-0012：可配置的 OpenAI-compatible 云端模型 Provider](adr/0012-configurable-openai-compatible-cloud-provider.md)，取代 ADR-0009 与 ADR-0011
+- [ADR-0013：本地 Schema 校验与显式 Structured Output Mode](adr/0013-local-schema-validation-structured-output-modes.md)，取代 ADR-0012
 - [ADR-0010：最小 Docker 执行边界](adr/0010-minimal-docker-execution-boundary.md)，取代 ADR-0004
 
 实现范围与验收合同见 [MVP Specification](spec.md)。

@@ -5,6 +5,7 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import TypeVar
 
+import pytest
 from pydantic import BaseModel
 
 from coderca import model_gate
@@ -13,6 +14,7 @@ from coderca.model_provider import (
     ModelConfiguration,
     ModelProviderError,
     StructuredModelResponse,
+    StructuredOutputMode,
     load_model_environment,
 )
 
@@ -23,27 +25,35 @@ def test_model_compatibility_gate_module_exists() -> None:
     assert find_spec("coderca.model_gate") is not None
 
 
-def model_configuration() -> ModelConfiguration:
+def model_configuration(
+    mode: str = "native_json_schema",
+) -> ModelConfiguration:
     configuration, _ = load_model_environment(
         {
             "CODERCA_MODEL_BASE_URL": "https://models.example/private/account/v1",
             "CODERCA_MODEL_ID": "example-model",
             "CODERCA_MODEL_API_KEY": "secret-key",
+            "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE": mode,
         }
     )
     return configuration
 
 
-def test_successful_gate_runs_each_probe_once_and_writes_a_redacted_report(
+@pytest.mark.parametrize(
+    "mode",
+    ["native_json_schema", "json_text"],
+)
+def test_successful_gate_runs_the_same_probes_and_records_mode(
     tmp_path: Path,
     valid_model_gate_responses: dict[str, dict[str, object]],
+    mode: str,
 ) -> None:
     assert hasattr(model_gate, "run_model_compatibility_gate")
     provider = FakeModelProvider(valid_model_gate_responses)
 
     report = model_gate.run_model_compatibility_gate(
         provider=provider,
-        configuration=model_configuration(),
+        configuration=model_configuration(mode),
         output_directory=tmp_path / "gate",
     )
 
@@ -55,15 +65,20 @@ def test_successful_gate_runs_each_probe_once_and_writes_a_redacted_report(
         "python_patch",
     ]
     assert report.compatible is True
+    assert report.schema_version == "2"
     assert report.failure_category is None
     assert report.model_id == "example-model"
+    assert report.structured_output_mode == StructuredOutputMode(mode)
     assert report.endpoint == "https://models.example"
-    assert report.request_configuration.model_dump() == {
+    expected_request_configuration = {
         "stream": False,
         "temperature": 0,
-        "response_format_type": "json_schema",
-        "strict": True,
+        "response_format_type": (
+            "json_schema" if mode == "native_json_schema" else None
+        ),
+        "strict": True if mode == "native_json_schema" else None,
     }
+    assert report.request_configuration.model_dump() == expected_request_configuration
     assert [probe.status for probe in report.probes] == ["passed"] * 5
     assert len({probe.name for probe in report.probes}) == 5
     assert all(probe.original_response_artifact for probe in report.probes)
@@ -74,17 +89,48 @@ def test_successful_gate_runs_each_probe_once_and_writes_a_redacted_report(
     assert json.loads(serialized) == report.model_dump(mode="json")
     assert "secret-key" not in serialized
     assert "private/account" not in serialized
+    assert f'"structured_output_mode": "{mode}"' in serialized
     for probe in report.probes:
-        artifact_path = (
-            tmp_path / "gate" / str(probe.original_response_artifact)
-        )
+        artifact_path = tmp_path / "gate" / str(probe.original_response_artifact)
         assert artifact_path.is_file()
         assert "secret-key" not in artifact_path.read_text()
 
 
-def test_gate_stops_after_a_provider_failure_and_records_no_authorization_state(
+def test_gate_report_does_not_persist_request_extension_values(
     tmp_path: Path,
     valid_model_gate_responses: dict[str, dict[str, object]],
+) -> None:
+    configuration, _ = load_model_environment(
+        {
+            "CODERCA_MODEL_BASE_URL": "https://models.example/v1",
+            "CODERCA_MODEL_ID": "example-model",
+            "CODERCA_MODEL_API_KEY": "secret-key",
+            "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE": "json_text",
+            "CODERCA_MODEL_REQUEST_EXTENSIONS": (
+                '{"private_endpoint_setting":"do-not-persist"}'
+            ),
+        }
+    )
+
+    report = model_gate.run_model_compatibility_gate(
+        provider=FakeModelProvider(valid_model_gate_responses),
+        configuration=configuration,
+        output_directory=tmp_path / "gate",
+    )
+
+    serialized = report.model_dump_json()
+    assert "private_endpoint_setting" not in serialized
+    assert "do-not-persist" not in serialized
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ["native_json_schema", "json_text"],
+)
+def test_gate_stops_after_a_provider_failure_in_both_modes(
+    tmp_path: Path,
+    valid_model_gate_responses: dict[str, dict[str, object]],
+    mode: str,
 ) -> None:
     class FailingProvider(FakeModelProvider):
         def generate_structured(
@@ -112,7 +158,7 @@ def test_gate_stops_after_a_provider_failure_and_records_no_authorization_state(
 
     report = model_gate.run_model_compatibility_gate(
         provider=provider,
-        configuration=model_configuration(),
+        configuration=model_configuration(mode),
         output_directory=output_directory,
     )
 
@@ -123,15 +169,14 @@ def test_gate_stops_after_a_provider_failure_and_records_no_authorization_state(
     ]
     assert report.compatible is False
     assert report.failure_category == "timeout"
+    assert report.structured_output_mode.value == mode
     assert report.probes[-1].model_dump() == {
         "name": "tool_arguments",
         "status": "failed",
         "failure_category": "timeout",
         "original_response_artifact": None,
     }
-    report_payload = json.loads(
-        (output_directory / "model-gate.json").read_text()
-    )
+    report_payload = json.loads((output_directory / "model-gate.json").read_text())
     assert "authorized" not in report_payload
     assert "authorization" not in report_payload
     assert not (tmp_path / ".coderca-runs").exists()

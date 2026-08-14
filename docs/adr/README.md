@@ -13,6 +13,7 @@
 | [0009](0009-single-local-model-provider.md) | Superseded by 0012 | 只连接一个外部本地模型服务 |
 | [0010](0010-minimal-docker-execution-boundary.md) | Accepted | 单镜像、临时工作区、禁网、注册命令和超时 |
 | [0011](0011-single-gemini-cloud-model-provider.md) | Superseded by 0012 | 只连接 Gemini 云端模型 API |
-| [0012](0012-configurable-openai-compatible-cloud-provider.md) | Accepted | 使用单个可配置的 OpenAI-compatible 云端模型 |
+| [0012](0012-configurable-openai-compatible-cloud-provider.md) | Superseded by 0013 | 使用单个可配置的 OpenAI-compatible 云端模型 |
+| [0013](0013-local-schema-validation-structured-output-modes.md) | Accepted | 本地 Schema 校验与显式结构化输出模式 |
 
 ADR 被接受后不直接改写历史结论。若决策改变，应新增 ADR 并标记被替代关系。

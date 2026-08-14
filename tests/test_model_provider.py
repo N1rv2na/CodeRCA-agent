@@ -89,20 +89,26 @@ def running_loopback_server(
 
 def make_provider(
     transport: model_provider.HttpTransport,
+    mode: str = "native_json_schema",
+    request_extensions: str | None = None,
+    base_url: str = "https://models.example/v1",
+    model_id: str = "example-model",
 ) -> model_provider.OpenAICompatibleModelProvider:
-    configuration, api_key = model_provider.load_model_environment(
-        {
-            "CODERCA_MODEL_BASE_URL": "https://models.example/v1",
-            "CODERCA_MODEL_ID": "example-model",
-            "CODERCA_MODEL_API_KEY": "secret-key",
-        }
-    )
+    environment = {
+        "CODERCA_MODEL_BASE_URL": base_url,
+        "CODERCA_MODEL_ID": model_id,
+        "CODERCA_MODEL_API_KEY": "secret-key",
+        "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE": mode,
+    }
+    if request_extensions is not None:
+        environment["CODERCA_MODEL_REQUEST_EXTENSIONS"] = request_extensions
+    configuration, api_key = model_provider.load_model_environment(environment)
     return model_provider.OpenAICompatibleModelProvider(
         configuration, api_key, transport=transport
     )
 
 
-def test_model_configuration_is_loaded_from_the_three_canonical_variables() -> None:
+def test_model_configuration_defaults_request_extensions_to_empty() -> None:
     assert hasattr(model_provider, "ModelConfiguration")
 
     configuration, api_key = model_provider.load_model_environment(
@@ -110,6 +116,7 @@ def test_model_configuration_is_loaded_from_the_three_canonical_variables() -> N
             "CODERCA_MODEL_BASE_URL": "https://models.example/v1/",
             "CODERCA_MODEL_ID": "example-model",
             "CODERCA_MODEL_API_KEY": "secret-key",
+            "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE": "json_text",
             "UNRELATED_MODEL_KEY": "ignored",
         }
     )
@@ -119,8 +126,97 @@ def test_model_configuration_is_loaded_from_the_three_canonical_variables() -> N
         "https://models.example/v1/chat/completions"
     )
     assert configuration.model_id == "example-model"
+    assert configuration.structured_output_mode.value == "json_text"
+    assert dict(configuration.request_extensions) == {}
     assert not hasattr(configuration, "api_key")
     assert api_key.get_secret_value() == "secret-key"
+
+
+def test_blank_request_extensions_environment_value_defaults_to_empty() -> None:
+    configuration, _ = model_provider.load_model_environment(
+        {
+            "CODERCA_MODEL_BASE_URL": "https://models.example/v1",
+            "CODERCA_MODEL_ID": "example-model",
+            "CODERCA_MODEL_API_KEY": "secret-key",
+            "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE": "json_text",
+            "CODERCA_MODEL_REQUEST_EXTENSIONS": "   ",
+        }
+    )
+
+    assert dict(configuration.request_extensions) == {}
+
+
+def test_model_configuration_loads_explicit_json_request_extensions() -> None:
+    configuration, _ = model_provider.load_model_environment(
+        {
+            "CODERCA_MODEL_BASE_URL": "https://models.example/v1",
+            "CODERCA_MODEL_ID": "example-model",
+            "CODERCA_MODEL_API_KEY": "secret-key",
+            "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE": "json_text",
+            "CODERCA_MODEL_REQUEST_EXTENSIONS": (
+                '{"reasoning_split":true,"thinking":{"type":"adaptive"}}'
+            ),
+        }
+    )
+
+    assert dict(configuration.request_extensions) == {
+        "reasoning_split": True,
+        "thinking": {"type": "adaptive"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("raw_extensions", "reason"),
+    [
+        ("{not-json", "invalid_json"),
+        ("[]", "not_object"),
+        ('"reasoning_split"', "not_object"),
+    ],
+)
+def test_model_configuration_rejects_invalid_request_extensions(
+    raw_extensions: str, reason: str
+) -> None:
+    with pytest.raises(model_provider.ModelProviderError) as raised:
+        model_provider.load_model_environment(
+            {
+                "CODERCA_MODEL_BASE_URL": "https://models.example/v1",
+                "CODERCA_MODEL_ID": "example-model",
+                "CODERCA_MODEL_API_KEY": "secret-key",
+                "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE": "json_text",
+                "CODERCA_MODEL_REQUEST_EXTENSIONS": raw_extensions,
+            }
+        )
+
+    assert raised.value.category == "configuration_error"
+    assert raised.value.details == {
+        "field": "CODERCA_MODEL_REQUEST_EXTENSIONS",
+        "reason": reason,
+    }
+
+
+@pytest.mark.parametrize(
+    "protected_key",
+    ["model", "messages", "stream", "temperature", "response_format"],
+)
+def test_model_configuration_rejects_protected_request_extension_keys(
+    protected_key: str,
+) -> None:
+    with pytest.raises(model_provider.ModelProviderError) as raised:
+        model_provider.load_model_environment(
+            {
+                "CODERCA_MODEL_BASE_URL": "https://models.example/v1",
+                "CODERCA_MODEL_ID": "example-model",
+                "CODERCA_MODEL_API_KEY": "secret-key",
+                "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE": "json_text",
+                "CODERCA_MODEL_REQUEST_EXTENSIONS": json.dumps({protected_key: True}),
+            }
+        )
+
+    assert raised.value.category == "configuration_error"
+    assert raised.value.details == {
+        "field": "CODERCA_MODEL_REQUEST_EXTENSIONS",
+        "protected_keys": [protected_key],
+    }
 
 
 @pytest.mark.parametrize(
@@ -129,6 +225,7 @@ def test_model_configuration_is_loaded_from_the_three_canonical_variables() -> N
         "CODERCA_MODEL_BASE_URL",
         "CODERCA_MODEL_ID",
         "CODERCA_MODEL_API_KEY",
+        "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE",
     ],
 )
 def test_missing_model_configuration_has_an_actionable_error(
@@ -138,6 +235,7 @@ def test_missing_model_configuration_has_an_actionable_error(
         "CODERCA_MODEL_BASE_URL": "https://models.example/v1",
         "CODERCA_MODEL_ID": "example-model",
         "CODERCA_MODEL_API_KEY": "secret-key",
+        "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE": "native_json_schema",
     }
     del environment[missing_name]
 
@@ -155,6 +253,7 @@ def test_provider_sends_strict_chat_completion_and_validates_the_response() -> N
             "CODERCA_MODEL_BASE_URL": "https://models.example/v1/",
             "CODERCA_MODEL_ID": "example-model",
             "CODERCA_MODEL_API_KEY": "secret-key",
+            "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE": "native_json_schema",
         }
     )
     transport = StubTransport(
@@ -168,7 +267,7 @@ def test_provider_sends_strict_chat_completion_and_validates_the_response() -> N
                         )
                     }
                 }
-            ]
+            ],
         }
     )
     provider = model_provider.OpenAICompatibleModelProvider(
@@ -191,8 +290,7 @@ def test_provider_sends_strict_chat_completion_and_validates_the_response() -> N
             {
                 "message": {
                     "content": (
-                        '{"stage": "hypothesis_generation", '
-                        '"next_action": "inspect"}'
+                        '{"stage": "hypothesis_generation", "next_action": "inspect"}'
                     )
                 }
             }
@@ -207,6 +305,13 @@ def test_provider_sends_strict_chat_completion_and_validates_the_response() -> N
     }
     assert request.timeout_seconds == 12
     payload = json.loads(request.body)
+    assert set(payload) == {
+        "model",
+        "messages",
+        "stream",
+        "temperature",
+        "response_format",
+    }
     assert payload["model"] == "example-model"
     assert payload["stream"] is False
     assert payload["temperature"] == 0
@@ -219,6 +324,234 @@ def test_provider_sends_strict_chat_completion_and_validates_the_response() -> N
     assert schema["name"] == "stage_probe"
     assert schema["strict"] is True
     assert schema["schema"] == StageResult.model_json_schema()
+
+
+def test_json_text_mode_omits_response_format_and_validates_raw_json() -> None:
+    transport = StubTransport(
+        {
+            "provider_metadata": {"echoed_credential": "secret-key"},
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"stage":"hypothesis_generation","next_action":"inspect"}'
+                        )
+                    }
+                }
+            ],
+        }
+    )
+    provider = make_provider(transport, mode="json_text")
+
+    result = provider.generate_structured(
+        schema_name="stage_probe",
+        system_prompt="Return the requested decision.",
+        user_prompt="A CI test failed.",
+        response_model=StageResult,
+    )
+
+    assert result.value == StageResult(
+        stage="hypothesis_generation", next_action="inspect"
+    )
+    assert "secret-key" not in json.dumps(result.raw_response)
+    payload = json.loads(transport.requests[0].body)
+    assert "response_format" not in payload
+    system_content = payload["messages"][0]["content"]
+    assert "Return exactly one raw JSON value" in system_content
+    assert "Do not use Markdown fences" in system_content
+    assert '"additionalProperties": false' in system_content
+
+
+def test_json_text_mode_adds_request_extensions_without_provider_inference() -> None:
+    transport = StubTransport(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"stage":"hypothesis_generation","next_action":"inspect"}'
+                        )
+                    }
+                }
+            ]
+        }
+    )
+    provider = make_provider(
+        transport,
+        mode="json_text",
+        request_extensions='{"reasoning_split":true}',
+    )
+
+    provider.generate_structured(
+        schema_name="stage_probe",
+        system_prompt="Return the requested decision.",
+        user_prompt="A CI test failed.",
+        response_model=StageResult,
+    )
+
+    payload = json.loads(transport.requests[0].body)
+    assert payload["reasoning_split"] is True
+    assert "response_format" not in payload
+    assert payload["model"] == "example-model"
+
+
+@pytest.mark.parametrize(
+    ("base_url", "model_id"),
+    [
+        ("https://api.minimax.example/v1", "MiniMax-M3"),
+        ("https://modelscope.example/v1", "GLM-5.2"),
+    ],
+)
+def test_request_extensions_do_not_trigger_endpoint_or_model_name_branches(
+    base_url: str, model_id: str
+) -> None:
+    transport = StubTransport(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"stage":"hypothesis_generation","next_action":"inspect"}'
+                        )
+                    }
+                }
+            ]
+        }
+    )
+    provider = make_provider(
+        transport,
+        mode="json_text",
+        request_extensions='{"explicit_extension":true}',
+        base_url=base_url,
+        model_id=model_id,
+    )
+
+    provider.generate_structured(
+        schema_name="stage_probe",
+        system_prompt="Return the requested decision.",
+        user_prompt="A CI test failed.",
+        response_model=StageResult,
+    )
+
+    payload = json.loads(transport.requests[0].body)
+    assert set(payload) == {
+        "model",
+        "messages",
+        "stream",
+        "temperature",
+        "explicit_extension",
+    }
+    assert payload["model"] == model_id
+    assert payload["explicit_extension"] is True
+
+
+def test_provider_redacts_echoed_string_request_extension_values() -> None:
+    transport = StubTransport(
+        {
+            "provider_metadata": {"echoed_extension": "private-extension-value"},
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"stage":"hypothesis_generation","next_action":"inspect"}'
+                        )
+                    }
+                }
+            ],
+        }
+    )
+    provider = make_provider(
+        transport,
+        mode="json_text",
+        request_extensions=(
+            '{"endpoint_option":{"private_value":"private-extension-value"}}'
+        ),
+    )
+
+    response = provider.generate_structured(
+        schema_name="stage_probe",
+        system_prompt="Return the requested decision.",
+        user_prompt="A CI test failed.",
+        response_model=StageResult,
+    )
+
+    serialized = json.dumps(response.raw_response)
+    assert "private-extension-value" not in serialized
+    assert "[REDACTED]" in serialized
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '```json\n{"stage":"hypothesis_generation","next_action":"inspect"}\n```',
+        (
+            "<think>reasoning</think>"
+            '{"stage":"hypothesis_generation","next_action":"inspect"}'
+        ),
+        (
+            "Here is the result: "
+            '{"stage":"hypothesis_generation","next_action":"inspect"}'
+        ),
+    ],
+)
+def test_json_text_mode_rejects_wrapped_json_without_fuzzy_extraction(
+    content: str,
+) -> None:
+    transport = StubTransport({"choices": [{"message": {"content": content}}]})
+    provider = make_provider(transport, mode="json_text")
+
+    with pytest.raises(model_provider.ModelProviderError) as raised:
+        provider.generate_structured(
+            schema_name="stage_probe",
+            system_prompt="system",
+            user_prompt="user",
+            response_model=StageResult,
+        )
+
+    assert raised.value.category == "invalid_json"
+    assert len(transport.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ["native_json_schema", "json_text"],
+)
+def test_all_structured_output_modes_reject_locally_invalid_schema(
+    mode: str,
+) -> None:
+    transport = StubTransport(
+        {"choices": [{"message": {"content": '{"stage":"ready"}'}}]}
+    )
+    provider = make_provider(transport, mode=mode)
+
+    with pytest.raises(model_provider.ModelProviderError) as raised:
+        provider.generate_structured(
+            schema_name="stage_probe",
+            system_prompt="system",
+            user_prompt="user",
+            response_model=StageResult,
+        )
+
+    assert raised.value.category == "schema_mismatch"
+    assert len(transport.requests) == 1
+
+
+def test_model_configuration_rejects_unknown_structured_output_mode() -> None:
+    with pytest.raises(model_provider.ModelProviderError) as raised:
+        model_provider.load_model_environment(
+            {
+                "CODERCA_MODEL_BASE_URL": "https://models.example/v1",
+                "CODERCA_MODEL_ID": "example-model",
+                "CODERCA_MODEL_API_KEY": "secret-key",
+                "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE": "auto",
+            }
+        )
+
+    assert raised.value.category == "configuration_error"
+    assert raised.value.details == {
+        "field": "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE",
+        "allowed": ["native_json_schema", "json_text"],
+    }
 
 
 @pytest.mark.parametrize(
@@ -354,9 +687,7 @@ def test_default_transport_posts_the_request_with_urllib(
         12,
     )
 
-    assert response == model_provider.HttpResponse(
-        status_code=200, body=b'{"ok":true}'
-    )
+    assert response == model_provider.HttpResponse(status_code=200, body=b'{"ok":true}')
     request = captured["request"]
     assert isinstance(request, Request)
     assert request.full_url == "https://models.example/v1/chat/completions"
@@ -404,6 +735,9 @@ def test_provider_integrates_with_a_local_fake_http_service(
             model_provider.ModelConfiguration(
                 base_url=f"http://127.0.0.1:{server.server_port}/v1",
                 model_id="fake-model",
+                structured_output_mode=(
+                    model_provider.StructuredOutputMode.NATIVE_JSON_SCHEMA
+                ),
             ),
             SecretStr("fake-key"),
             timeout_seconds=2,
@@ -415,9 +749,7 @@ def test_provider_integrates_with_a_local_fake_http_service(
             response_model=StageResult,
         )
 
-    assert response.value == StageResult(
-        stage="ready", next_action="inspect"
-    )
+    assert response.value == StageResult(stage="ready", next_action="inspect")
     assert captured["path"] == "/v1/chat/completions"
     assert captured["authorization"] == "Bearer fake-key"
     request_body = captured["body"]
@@ -462,6 +794,9 @@ def test_provider_classifies_fake_http_service_failures(
             model_provider.ModelConfiguration(
                 base_url=f"http://127.0.0.1:{server.server_port}/v1",
                 model_id="fake-model",
+                structured_output_mode=(
+                    model_provider.StructuredOutputMode.NATIVE_JSON_SCHEMA
+                ),
             ),
             SecretStr("fake-key"),
             timeout_seconds=2,
@@ -499,6 +834,9 @@ def test_provider_classifies_fake_http_timeout(
             model_provider.ModelConfiguration(
                 base_url=f"http://127.0.0.1:{server.server_port}/v1",
                 model_id="fake-model",
+                structured_output_mode=(
+                    model_provider.StructuredOutputMode.NATIVE_JSON_SCHEMA
+                ),
             ),
             SecretStr("fake-key"),
             timeout_seconds=0.001,
@@ -531,6 +869,9 @@ def test_provider_classifies_fake_http_connection_drop(
             model_provider.ModelConfiguration(
                 base_url=f"http://127.0.0.1:{server.server_port}/v1",
                 model_id="fake-model",
+                structured_output_mode=(
+                    model_provider.StructuredOutputMode.NATIVE_JSON_SCHEMA
+                ),
             ),
             SecretStr("fake-key"),
             timeout_seconds=2,
@@ -553,12 +894,11 @@ def test_provider_uses_the_standard_library_transport_by_default() -> None:
             "CODERCA_MODEL_BASE_URL": "https://models.example/v1",
             "CODERCA_MODEL_ID": "example-model",
             "CODERCA_MODEL_API_KEY": "secret-key",
+            "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE": "native_json_schema",
         }
     )
 
-    provider = model_provider.OpenAICompatibleModelProvider(
-        configuration, api_key
-    )
+    provider = model_provider.OpenAICompatibleModelProvider(configuration, api_key)
 
     assert isinstance(provider.transport, model_provider.UrlLibHttpTransport)
 
@@ -582,6 +922,7 @@ def test_model_configuration_rejects_unsafe_or_invalid_base_urls(
                 "CODERCA_MODEL_BASE_URL": base_url,
                 "CODERCA_MODEL_ID": "example-model",
                 "CODERCA_MODEL_API_KEY": "secret-key",
+                "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE": "native_json_schema",
             }
         )
 

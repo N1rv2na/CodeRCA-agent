@@ -4,6 +4,8 @@ import json
 from importlib.util import find_spec
 from pathlib import Path
 
+import pytest
+
 from coderca import model_gate, model_gate_cli
 from coderca.model_provider import FakeModelProvider, ModelConfiguration
 
@@ -17,6 +19,7 @@ def valid_environment() -> dict[str, str]:
         "CODERCA_MODEL_BASE_URL": "https://models.example/v1",
         "CODERCA_MODEL_ID": "example-model",
         "CODERCA_MODEL_API_KEY": "secret-key",
+        "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE": "json_text",
     }
 
 
@@ -45,18 +48,20 @@ def test_cli_runs_the_explicit_gate_and_prints_the_report_location(
         "compatible": True,
         "failure_category": None,
         "model": "example-model",
-        "model_compatibility_report": str(
-            output_directory / "model-gate.json"
-        ),
+        "model_compatibility_report": str(output_directory / "model-gate.json"),
     }
 
 
+@pytest.mark.parametrize(
+    "missing_name",
+    ["CODERCA_MODEL_API_KEY", "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE"],
+)
 def test_cli_reports_missing_configuration_without_creating_gate_artifacts(
-    tmp_path: Path, capsys: object
+    tmp_path: Path, capsys: object, missing_name: str
 ) -> None:
     output_directory = tmp_path / "gate"
     environment = valid_environment()
-    del environment["CODERCA_MODEL_API_KEY"]
+    del environment[missing_name]
 
     exit_code = model_gate_cli.main(
         ["--output-directory", str(output_directory)], environment=environment
@@ -67,7 +72,7 @@ def test_cli_reports_missing_configuration_without_creating_gate_artifacts(
     assert captured.out == ""
     error = json.loads(captured.err)["error"]
     assert error["code"] == "configuration_error"
-    assert error["details"] == {"missing": ["CODERCA_MODEL_API_KEY"]}
+    assert error["details"] == {"missing": [missing_name]}
     assert "secret-key" not in captured.err
     assert not output_directory.exists()
 
@@ -89,6 +94,7 @@ def test_cli_returns_nonzero_for_an_incompatible_report(
         report = model_gate.ModelCompatibilityReport(
             endpoint="https://models.example",
             model_id=configuration.model_id,
+            structured_output_mode=configuration.structured_output_mode,
             request_configuration=model_gate.GateRequestConfiguration(),
             compatible=False,
             failure_category="schema_mismatch",
@@ -101,9 +107,7 @@ def test_cli_returns_nonzero_for_an_incompatible_report(
             ],
         )
         output_directory.mkdir(parents=True)
-        (output_directory / "model-gate.json").write_text(
-            report.model_dump_json()
-        )
+        (output_directory / "model-gate.json").write_text(report.model_dump_json())
         return report
 
     monkeypatch.setattr(  # type: ignore[attr-defined]

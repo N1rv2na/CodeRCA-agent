@@ -83,4 +83,4 @@ None — can start immediately.
 ## Related ADRs
 
 - ADR-0008 — 两周 MVP 按 Diagnosis Run 目录保存记录
-- ADR-0012 — 使用可配置的 OpenAI-compatible 云端模型 Provider
+- ADR-0013 — 本地 Schema 校验与显式 Structured Output Mode
