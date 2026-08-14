@@ -32,13 +32,13 @@ MVP 的目标不是证明 CodeRCA 在大规模数据集上优于其他系统，�
 
 MVP 完成必须同时满足：
 
-- 一个外部本地模型能够完成至少一个真实端到端 Diagnosis Run；
+- 一个通过 Model Compatibility Gate 检查的已配置 OpenAI-compatible 云端模型能够完成至少一个真实端到端 Diagnosis Run；
 - 五个工具均通过统一契约测试；
 - Agent 能维护最多三个 Hypothesis，并用 Supporting Evidence 和 Contradicting Evidence 更新排序；
 - Agent 能为 Top-1 生成一个可应用补丁，并在 Docker 中运行注册 Validation；
 - 运行过程保存结构化事件和 Root Cause Report；
 - 三个冻结任务可以执行确定性的 Outcome Evaluation 与 Trajectory Evaluation；
-- 默认自动化测试不依赖真实模型服务。
+- 默认自动化测试不依赖真实模型 API、API Key 或网络。
 
 三个任务的结果只作为工程回归证据，不用于声称统计显著性、跨仓库泛化或相对 Baseline 的总体优势。
 
@@ -74,7 +74,7 @@ MVP 完成必须同时满足：
 - Top-3 补丁逐个生成与验证；
 - FastAPI、后台 Worker、Web UI 和静态 HTML 报告；
 - SQLite、内容寻址 Artifact、崩溃恢复和事件回放；
-- 云端模型、多真实模型适配和运行回放兜底；
+- 本地模型后端、原生厂商 SDK、多真实后端、模型路由、自动选择、回退和运行回放兜底；
 - PyPI 发布、Docker Compose 和公网部署；
 - MCP、任意 Shell、自动推送分支或创建 PR；
 - 生产级沙箱安全与恶意代码防御。
@@ -98,7 +98,7 @@ flowchart LR
     CLI --> App[Diagnosis Application Service]
     Eval[Evaluation Harness] --> App
     App --> Agent[Lifecycle State Machine]
-    Agent --> Model[Local ModelProvider]
+    Agent --> Model[OpenAI-compatible ModelProvider]
     Agent --> Runtime[Tool Runtime]
     Runtime --> Diff[Git Diff]
     Runtime --> Retrieval[Code RAG]
@@ -110,7 +110,7 @@ flowchart LR
 |---|---|---|
 | Task Intake | 读取 Task Manifest，校验同仓库任务输入 | 任意仓库导入和环境修复 |
 | Diagnosis | 管理 Hypothesis、Evidence、Experiment、排序与停止 | 直接执行命令或读取任意文件 |
-| Model | 通过固定 HTTP 协议请求阶段决策 | 模型加载、量化和 GPU 生命周期 |
+| Model | 通过 OpenAI-compatible Chat Completions 协议请求阶段决策 | 模型托管、厂商原生 SDK、路由和回退 |
 | Tool Runtime | Schema、权限、超时、错误和审计 | Root Cause 推理 |
 | Retrieval | 构建并查询固定代码索引 | 选择最终 Root Cause |
 | Sandbox | 在临时容器工作区运行注册命令和补丁 | 恶意代码与生产多租户防御 |
@@ -194,7 +194,7 @@ stateDiagram-v2
 
 ### 7.2 阶段输出 Schema
 
-本地模型不填写一个万能决策对象。各阶段使用字段较少的独立 Schema：
+模型不填写一个万能决策对象。各阶段使用字段较少的独立 Schema：
 
 - `FormHypothesesDecision`：形成一至三个可证伪 Hypothesis；
 - `SelectExperimentDecision`：选择 Hypothesis、工具、目的、预期 Observation 和参数；
@@ -244,16 +244,24 @@ Contradicting Evidence 使用对应负权重。具体整数在实现前冻结并
 
 ### 8.2 ModelProvider
 
-CodeRCA 只实现一个固定 HTTP ModelProvider，连接用户预先启动的外部本地推理服务。Agent 进程不加载模型，也不管理量化、CUDA 或显存。
+CodeRCA 只实现一个 OpenAI-compatible HTTP ModelProvider。每次进程运行由操作者通过 `CODERCA_MODEL_BASE_URL`、`CODERCA_MODEL_ID` 和 `CODERCA_MODEL_API_KEY` 配置一个云端 Chat Completions 端点和模型；Agent 不进行模型发现、自动选择、路由或回退。
 
-真实后端只要求支持文本请求和结构化 JSON 响应，不依赖服务专属 Tool Calling。开发早期必须用最小探针验证：
+真实请求固定使用非流式调用、`temperature=0`、`response_format.type=json_schema` 和 `json_schema.strict=true`，响应还必须通过本地 Pydantic Schema 校验。Agent 不依赖服务专属 Tool Calling 或原生厂商 SDK。
+
+Model Compatibility Gate 是显式运行的兼容性检查，不是 Diagnosis Run 的授权门禁，也不是模型 Benchmark。它最多发起一次预检和以下四个一次性探针：
 
 - 阶段 Schema 输出；
 - 工具选择和合法参数；
 - 根据 Observation 更新 Evidence；
 - 生成可应用的小型 Python 补丁。
 
-自动化测试使用 FakeModelProvider。MVP 不实现云端兜底、多真实后端或录制轨迹回放。
+门禁生成脱敏的 Model Compatibility Report；失败返回非零退出码，但 Diagnosis Run 只读取当前 Model Configuration，不隐式读取门禁报告或阻止运行。自动化测试使用 FakeModelProvider。MVP 不实现本地模型后端、原生厂商 SDK、多真实后端、路由、回退或录制轨迹回放。
+
+### 8.3 云端数据与凭证边界
+
+Diagnosis Run 会把所需的公开基准代码片段、CI 日志和结构化状态发送到操作者配置的云端 API。MVP 仅处理冻结的公开开源基准仓库，不承诺私有代码或生产数据的隐私能力。
+
+API Key 只从进程环境读取，不写入 Task Manifest、运行目录、日志、Model Compatibility Report 或 Docker 容器。错误与审计信息必须脱敏，不记录 Authorization Header。
 
 ## 9. Tool Runtime
 
@@ -320,7 +328,7 @@ BM25 召回 + 向量召回
        Top-K 结果
 ```
 
-embedding 在索引阶段预计算。BM25、向量搜索和 CPU reranker 不占用诊断模型的 GPU 显存。融合方法、候选数和 Top-K 在实现前冻结，不暴露给 Agent，也不做消融或在线调参。
+embedding 在索引阶段预计算。BM25、向量搜索和 CPU reranker 在本机运行，不依赖诊断模型的计算资源。融合方法、候选数和 Top-K 在实现前冻结，不暴露给 Agent，也不做消融或在线调参。
 
 查询信号来自异常类型、错误消息、堆栈、失败测试、diff 符号以及当前 Hypothesis 生成的语义查询。动态查询必须关联对应 Hypothesis。
 
@@ -334,8 +342,8 @@ MVP 使用一个预构建 Django Docker 镜像。每次执行创建临时工作�
 - 默认关闭网络；
 - 只执行注册命令；
 - 每次命令有统一超时；
-- 不向容器挂载模型凭证；
-- 模型服务运行在容器外。
+- 不向容器挂载 `CODERCA_MODEL_API_KEY` 或其他模型凭证；
+- 云端模型请求由宿主 Agent 进程发起，不经过默认禁网的测试容器。
 
 该边界只用于降低正常测试造成意外副作用的风险，不承诺抵御恶意代码、容器逃逸或生产多租户攻击。完整 CPU/内存配额、只读根文件系统矩阵和跨平台兼容延期。
 
@@ -444,13 +452,13 @@ Evaluation 不调用 LLM Judge，不与 Baseline 比较，不汇总具有泛化�
 
 ### 15.4 Agent Evaluation
 
-三个冻结任务显式运行，不进入默认 CI。默认 CI 使用 FakeModelProvider，不要求 GPU、真实模型或联网。
+三个冻结任务显式运行，不进入默认 CI。默认 CI 使用 FakeModelProvider，不要求 API Key、真实模型、GPU 或联网。
 
 ## 16. 交付顺序与降级规则
 
 ### 16.1 纵向优先顺序
 
-1. 本地模型最小兼容性探针；
+1. OpenAI-compatible 模型兼容性门禁；
 2. 一个 Task Manifest 与 FakeModelProvider 纵向骨架；
 3. 最小状态机、阶段 Schema 和五工具运行时；
 4. Task 1 的真实模型、真实工具和 Docker Validation 闭环；
@@ -468,17 +476,17 @@ Evaluation 不调用 LLM Judge，不与 Baseline 比较，不汇总具有泛化�
 2. 将冻结任务从三个减少为两个；
 3. 报告从 Top-3 减少为 Top-1，但内部仍保留多个 Hypothesis。
 
-不得削减：最小状态机、五工具协议、真实本地模型、一个 Docker Experiment 和 Top-1 补丁 Validation。
+不得削减：最小状态机、五工具协议、已配置的真实云端模型、一个 Docker Experiment 和 Top-1 补丁 Validation。
 
 ## 17. 主要风险
 
 | 风险 | 影响 | 控制 |
 |---|---|---|
-| 8 GB 显存下本地模型结构输出不稳 | Agent 无法真实闭环 | 早期最小探针；阶段小 Schema；模型独占 GPU |
+| 云端模型不支持严格 Schema 或产生协议差异 | Agent 无法真实闭环 | 早期运行通用兼容性门禁；阶段小 Schema；本地 Pydantic 校验 |
 | 三个任务仍过度定制 | 招聘证据被质疑 | 三种不同必要路径；Task 3 延后运行；公开逐任务轨迹 |
 | 固定 RAG 管线环境复杂 | 首个闭环延期 | Task 1 可先用最小搜索接缝；第七天先删除 reranker |
 | Docker 在 WSL/开发机行为不一致 | Validation 不稳定 | 单镜像、单仓库、注册命令和统一超时 |
-| 本地模型输出不可应用补丁 | 核心验证失败 | 早期补丁探针；只允许一个小型 Top-1 补丁 |
+| 已配置模型输出不可应用补丁 | 核心验证失败 | 早期补丁探针；只允许一个小型 Top-1 补丁 |
 | Scope 再次膨胀 | 两周无法交付 | 延期列表和不可削减核心作为变更门禁 |
 
 ## 18. 架构决策记录
@@ -487,7 +495,7 @@ Evaluation 不调用 LLM Judge，不与 Baseline 比较，不汇总具有泛化�
 - [ADR-0002：结构化 Tool Runtime 且不实现 MCP](adr/0002-typed-tool-runtime.md)
 - [ADR-0007：固定混合检索管线](adr/0007-fixed-retrieval-pipeline.md)，取代 ADR-0003
 - [ADR-0008：按运行目录持久化](adr/0008-run-directory-persistence.md)，取代 ADR-0005
-- [ADR-0009：单一本地外部模型服务](adr/0009-single-local-model-provider.md)，取代 ADR-0006
+- [ADR-0012：可配置的 OpenAI-compatible 云端模型 Provider](adr/0012-configurable-openai-compatible-cloud-provider.md)，取代 ADR-0009 与 ADR-0011
 - [ADR-0010：最小 Docker 执行边界](adr/0010-minimal-docker-execution-boundary.md)，取代 ADR-0004
 
 实现范围与验收合同见 [MVP Specification](spec.md)。

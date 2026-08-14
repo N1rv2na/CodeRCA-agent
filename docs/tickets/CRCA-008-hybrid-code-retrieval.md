@@ -56,7 +56,7 @@ Task 2 的 Root Symbol 不会直接出现在失败堆栈中，因此 Agent 必�
 - [ ] `search_code` 同时使用 BM25 与向量召回及固定融合，返回稳定 Schema 和 Top-K。
 - [ ] 每个动态查询关联一个活跃 Hypothesis，并记录查询来源和结果引用。
 - [ ] Faulty Commit 变化会拒绝旧索引并触发整库重建。
-- [ ] 运行期不占用诊断模型 GPU 计算 embedding。
+- [ ] 运行期 embedding 不依赖云端诊断模型或其计算资源。
 
 ## Testing Strategy
 
@@ -92,5 +92,4 @@ Task 2 的 Root Symbol 不会直接出现在失败堆栈中，因此 Agent 必�
 
 - ADR-0002 — 使用结构化工具运行时且不实现 MCP
 - ADR-0007 — 两周 MVP 使用固定混合检索管线
-- ADR-0009 — 两周 MVP 只连接一个外部本地模型服务
-
+- ADR-0012 — 使用可配置的 OpenAI-compatible 云端模型 Provider

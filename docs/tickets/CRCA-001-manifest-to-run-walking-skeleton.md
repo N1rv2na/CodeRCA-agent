@@ -22,13 +22,13 @@ CodeRCA 需要一个由 CLI 和后续 Evaluation Harness 共用的最高测试�
 - 建立 CLI、Diagnosis Application Service、FakeModelProvider 和运行目录之间的纵向调用路径。
 - 写入 Manifest 快照、JSONL 事件和最小 JSON Root Cause Report。
 - CLI 显示 Run ID、生命周期摘要、停止原因和运行目录。
-- 建立项目打包、测试入口和默认无 GPU 测试环境。
+- 建立项目打包、测试入口和默认无 API Key、网络或 GPU 的测试环境。
 
 ## Out of Scope
 
 - 完整诊断状态机和受约束 ReAct。
 - 五个真实工具、RAG、Docker 和补丁 Validation。
-- 真实本地模型服务。
+- 真实云端模型 API。
 - GitHub Issue、Web API、数据库或后台执行。
 
 ## Technical Approach
@@ -51,7 +51,7 @@ CodeRCA 需要一个由 CLI 和后续 Evaluation Harness 共用的最高测试�
 - [ ] 运行结束后存在 Manifest 快照、合法 JSONL 事件和最小 JSON 报告。
 - [ ] CLI 输出 Run ID、终态、停止原因和运行目录。
 - [ ] 非法 Manifest 在创建 Diagnosis Run 前失败，并给出结构化错误。
-- [ ] 默认自动化测试不需要 GPU、网络、Docker 或真实模型服务。
+- [ ] 默认自动化测试不需要 API Key、GPU、网络、Docker 或真实模型 API。
 
 ## Testing Strategy
 
@@ -83,5 +83,4 @@ None — can start immediately.
 ## Related ADRs
 
 - ADR-0008 — 两周 MVP 按 Diagnosis Run 目录保存记录
-- ADR-0009 — 两周 MVP 只连接一个外部本地模型服务
-
+- ADR-0012 — 使用可配置的 OpenAI-compatible 云端模型 Provider

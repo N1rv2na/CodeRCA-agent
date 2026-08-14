@@ -22,6 +22,20 @@ _Avoid_: Diagnosis Task、评测任务
 包含待诊断缺陷、并能够复现目标 CI 失败的代码版本。
 _Avoid_: 修复版本、当前最新版
 
+### 模型边界
+
+**Model Configuration（模型配置）**:
+一次真实模型运行使用的 OpenAI-compatible Endpoint、Model ID 和关键生成参数组合；API Key 不属于可持久化配置。
+_Avoid_: Provider 实例、API Key、自动模型路由
+
+**Model Compatibility Gate（模型兼容性门禁）**:
+显式检查 Model Configuration 是否满足 CodeRCA 最低结构化交互合同的工程验收。
+_Avoid_: Model Evaluation、Diagnosis Run 运行许可证
+
+**Model Compatibility Report（模型兼容性报告）**:
+一次 Model Compatibility Gate 产生的脱敏结果，记录被检查配置、探针结果和失败分类。
+_Avoid_: 跨进程授权、模型质量排名
+
 ### 根因推理
 
 **Root Cause（根因）**:

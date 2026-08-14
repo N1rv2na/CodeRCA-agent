@@ -14,7 +14,7 @@ M2 — Experiment & Patch Validation
 
 ## Goal
 
-使用真实本地模型对 Task 1 完成从 Task Manifest 到 Top-1 补丁 Validation 和最终 Root Cause Report 的端到端 Diagnosis Run。
+使用通过门禁检查的已配置 OpenAI-compatible 云端模型，对 Task 1 完成从 Task Manifest 到 Top-1 补丁 Validation 和最终 Root Cause Report 的端到端 Diagnosis Run。
 
 ## Scope
 
@@ -24,7 +24,7 @@ M2 — Experiment & Patch Validation
 - 在临时 Docker 工作区应用一个候选补丁。
 - 运行注册测试与轻量静态检查，记录一次 Public Validation。
 - Validation 后直接 Finalizing，不进行第二轮补丁搜索。
-- 完成 Task 1 的真实本地模型端到端验收。
+- 完成 Task 1 的真实云端模型端到端验收。
 
 ## Out of Scope
 
@@ -44,7 +44,7 @@ M2 — Experiment & Patch Validation
 4. 在临时工作区应用补丁并运行注册测试与轻量静态检查。
 5. 扩展 Root Cause Report 和运行产物以包含补丁及 Validation。
 6. 增加 FakeModelProvider 完整闭环测试。
-7. 使用通过门禁的真实本地模型运行 Task 1 并保存验收记录。
+7. 使用通过门禁检查的已配置 OpenAI-compatible 云端模型运行 Task 1 并保存验收记录。
 
 ## Acceptance Criteria
 
@@ -54,24 +54,24 @@ M2 — Experiment & Patch Validation
 - [ ] 补丁只修改临时工作区，Faulty Commit 的原始工作副本保持不变。
 - [ ] 注册测试和轻量静态检查均被记录为 Public Validation 结果。
 - [ ] Validation 通过或失败后都直接生成最终报告，不启动第二轮补丁搜索。
-- [ ] Task 1 能以真实本地模型完成全链路运行，并保存模型响应、工具输出、补丁、Validation、事件和报告。
+- [ ] Task 1 能以已配置的真实云端模型完成全链路运行，并保存模型响应、工具输出、补丁、Validation、事件和报告。
 
 ## Testing Strategy
 
 - 用可应用、语法错误、越界和修改禁止文件的 patch fixture 做合同测试。
 - 通过 FakeModelProvider 执行 Manifest、Hypothesis、Evidence、补丁、Validation 和报告的完整纵向路径。
 - 验证失败 Validation 仍生成报告且不会重新进入 Diagnosing。
-- 将 Task 1 真实模型验收作为显式本地测试，记录 Run Manifest 与运行目录。
+- 将 Task 1 真实模型验收作为显式本地命令，记录 Run Manifest 与运行目录。
 
 ## Dependencies
 
-- CRCA-003 — 建立本地模型兼容性门禁
+- CRCA-003 — 建立 OpenAI-compatible 模型兼容性门禁
 - CRCA-005 — 使用 Diff 与代码证据完成诊断循环
 - CRCA-006 — 在最小 Docker 边界中运行测试 Experiment
 
 ## Risks
 
-- 本地小模型补丁输出不稳定；通过小型阶段 Schema、一次纠错和早期探针限制风险。
+- 已配置模型补丁输出可能不稳定；通过小型阶段 Schema、一次纠错和早期探针限制风险。
 - 模型通过改测试投机；程序在应用前强制禁止修改测试与任务基础设施。
 - 端到端错误难定位；所有阶段保留结构化事件和原始产物引用。
 
@@ -90,6 +90,5 @@ M2 — Experiment & Patch Validation
 - ADR-0001 — 使用自研显式诊断状态机
 - ADR-0002 — 使用结构化工具运行时且不实现 MCP
 - ADR-0008 — 两周 MVP 按 Diagnosis Run 目录保存记录
-- ADR-0009 — 两周 MVP 只连接一个外部本地模型服务
+- ADR-0012 — 使用可配置的 OpenAI-compatible 云端模型 Provider
 - ADR-0010 — 两周 MVP 采用最小 Docker 执行边界
-

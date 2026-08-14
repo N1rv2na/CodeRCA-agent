@@ -14,7 +14,7 @@ CodeRCA 的核心招聘信号不是自由对话式 ReAct，而是由程序维护
 
 ## Goal
 
-让 Diagnosis Run 经过合法生命周期形成有界、结构化且可追踪的初始 Hypothesis 集合，并对本地模型结构失败采取确定的终止策略。
+让 Diagnosis Run 经过合法生命周期形成有界、结构化且可追踪的初始 Hypothesis 集合，并对模型结构失败采取确定的终止策略。
 
 ## Scope
 
@@ -64,12 +64,12 @@ CodeRCA 的核心招聘信号不是自由对话式 ReAct，而是由程序维护
 ## Dependencies
 
 - CRCA-001 — 建立 Manifest-to-Run 纵向骨架
-- CRCA-003 — 建立本地模型兼容性门禁
+- CRCA-003 — 建立 OpenAI-compatible 模型兼容性门禁
 
 ## Risks
 
 - 状态机过度抽象导致工期失控；只实现 Spec 已列阶段和当前转移。
-- 小模型在单个大 Schema 上不稳定；保持阶段 Schema 小而独立。
+- 已配置模型在单个大 Schema 上可能不稳定；保持阶段 Schema 小而独立。
 - 测试绑定 Prompt 文本；测试只断言公开 Schema 和领域不变量。
 
 ## Estimated Effort
@@ -86,5 +86,4 @@ CodeRCA 的核心招聘信号不是自由对话式 ReAct，而是由程序维护
 
 - ADR-0001 — 使用自研显式诊断状态机
 - ADR-0008 — 两周 MVP 按 Diagnosis Run 目录保存记录
-- ADR-0009 — 两周 MVP 只连接一个外部本地模型服务
-
+- ADR-0012 — 使用可配置的 OpenAI-compatible 云端模型 Provider

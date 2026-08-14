@@ -22,7 +22,7 @@ Task 1 和 Task 2 可以证明诊断闭环与 RAG，但未必证明 Agent 会根
 - 保证初始信息支持至少两个合理且可区分的 Hypothesis。
 - 设计一个注册测试 Experiment，其 Observation 能反驳至少一个错误候选。
 - 冻结 Manifest、Ground Truth 和期望的关键轨迹性质。
-- 使用真实本地模型执行端到端 Diagnosis Run。
+- 使用通过门禁检查的已配置 OpenAI-compatible 云端模型执行端到端 Diagnosis Run。
 - 记录排序变化、反证来源、Top-1 补丁和 Validation。
 
 ## Out of Scope
@@ -42,7 +42,7 @@ Task 3 只能在核心行为基本冻结后加入，避免把 Agent 针对该任
 3. 注册能够区分候选的最小测试命令。
 4. 编写 Manifest、独立 Ground Truth 和轨迹期望。
 5. 用 FakeModelProvider 验证评测 fixture 能识别正确与违规轨迹。
-6. 使用真实本地模型执行并人工检查最终因果链。
+6. 使用已配置的真实云端模型执行并人工检查最终因果链。
 
 ## Acceptance Criteria
 
@@ -88,4 +88,3 @@ Task 3 只能在核心行为基本冻结后加入，避免把 Agent 针对该任
 - ADR-0001 — 使用自研显式诊断状态机
 - ADR-0008 — 两周 MVP 按 Diagnosis Run 目录保存记录
 - ADR-0010 — 两周 MVP 采用最小 Docker 执行边界
-
