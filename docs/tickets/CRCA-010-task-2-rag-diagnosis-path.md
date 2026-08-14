@@ -14,7 +14,7 @@ M3 — Retrieval & Generalization Evidence
 
 ## Goal
 
-新增一个冻结业务逻辑回归任务，并用真实 Gemini 模型证明 Agent 能通过与 Hypothesis 绑定的混合检索定位 Root Symbol、生成 Top-1 补丁并完成 Validation。
+新增一个冻结业务逻辑回归任务，并用真实本地模型证明 Agent 能通过与 Hypothesis 绑定的混合检索定位 Root Symbol、生成 Top-1 补丁并完成 Validation。
 
 ## Scope
 
@@ -41,7 +41,7 @@ Task 2 复用已经冻结的仓库、镜像、索引流程、Prompt、Schema 和
 2. 冻结 Faulty Commit、CI 日志、注册命令、Manifest 和 Ground Truth。
 3. 验证故障稳定复现且无答案泄漏。
 4. 建立 Task 2 的确定性 Outcome 和 Trajectory 期望。
-5. 使用真实 Gemini 模型运行完整 Diagnosis Run。
+5. 使用真实本地模型运行完整 Diagnosis Run。
 6. 记录并人工检查检索路径、因果机制和 Validation 结果。
 
 ## Acceptance Criteria
@@ -51,7 +51,7 @@ Task 2 复用已经冻结的仓库、镜像、索引流程、Prompt、Schema 和
 - [ ] Agent 可见输入与 Root Symbol、参考补丁和 Evaluation 答案隔离。
 - [ ] 完整运行至少包含一次绑定活跃 Hypothesis 的 `search_code` 调用。
 - [ ] 支持 Top-1 的 Evidence 引用检索命中的正确 Root Symbol 元数据，而不是仅引用失败表象。
-- [ ] 真实 Gemini 模型运行输出正确 Top-1 Root Symbol、可应用补丁和一次 Validation 结果。
+- [ ] 真实本地模型运行输出正确 Top-1 Root Symbol、可应用补丁和一次 Validation 结果。
 - [ ] 未启用 reranker 的降级运行仍使用相同 Manifest、Agent 工作流和工具合同。
 
 ## Testing Strategy
@@ -79,7 +79,7 @@ Day-7 降级路径：
 
 - 任务虽然隐藏了堆栈位置，但可由 diff 直接猜中；应确保检索 Evidence 对定位具有实质作用。
 - 为强制 RAG 而硬编码工具路径；Agent 仍需基于 Hypothesis 选择工具，评测只检查必要轨迹证据。
-- Gemini 模型未命中不等于检索失败；分别保存 Search Result 与 Agent 决策以定位问题。
+- 本地模型未命中不等于检索失败；分别保存 Search Result 与 Agent 决策以定位问题。
 
 ## Estimated Effort
 
@@ -95,5 +95,6 @@ Day-7 降级路径：
 
 - ADR-0007 — 两周 MVP 使用固定混合检索管线
 - ADR-0008 — 两周 MVP 按 Diagnosis Run 目录保存记录
-- ADR-0011 — 两周 MVP 使用单一 Gemini 云端模型 API
+- ADR-0009 — 两周 MVP 只连接一个外部本地模型服务
 - ADR-0010 — 两周 MVP 采用最小 Docker 执行边界
+

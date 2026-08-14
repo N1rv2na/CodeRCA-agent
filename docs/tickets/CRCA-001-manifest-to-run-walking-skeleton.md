@@ -28,7 +28,7 @@ CodeRCA 需要一个由 CLI 和后续 Evaluation Harness 共用的最高测试�
 
 - 完整诊断状态机和受约束 ReAct。
 - 五个真实工具、RAG、Docker 和补丁 Validation。
-- 真实 Gemini API 调用。
+- 真实本地模型服务。
 - GitHub Issue、Web API、数据库或后台执行。
 
 ## Technical Approach
@@ -83,4 +83,5 @@ None — can start immediately.
 ## Related ADRs
 
 - ADR-0008 — 两周 MVP 按 Diagnosis Run 目录保存记录
-- ADR-0011 — 两周 MVP 使用单一 Gemini 云端模型 API
+- ADR-0009 — 两周 MVP 只连接一个外部本地模型服务
+
