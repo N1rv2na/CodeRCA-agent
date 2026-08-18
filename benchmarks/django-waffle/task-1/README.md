@@ -14,7 +14,8 @@ The Agent-visible Task Manifest is `manifest.json`; Evaluation Ground Truth is
 stored only in `ground_truth.json` and is deliberately separate. The visible CI artifact is
 `ci/task-1-failure.log`; it contains only an opaque test identifier and generic
 assertion mismatch, not the Root Symbol, reference repair, fixed source, or an
-answer-bearing commit message.
+answer-bearing commit message. It is a frozen, sanitized representation of the
+target CI failure, not a byte-for-byte copy of `probe.py` stdout or stderr.
 
 The sole registered command is frozen in `registered-command.json` under ID
 `django_waffle_task_1_v1`; it contains an argv list rather than an arbitrary
@@ -22,7 +23,10 @@ shell string. The benchmark-only `probe.py`
 uses no database, external service, randomness, percentage rollout, or
 concurrency. Host execution of that probe is only an authoring check in
 `tests/test_benchmark.py`; it is not the Docker Tool Runtime planned by
-CRCA-006.
+CRCA-006. The authoring check recognizes the private marker emitted only for
+the target regression and maps it to the public `assertion_mismatch`
+manifestation. Environment or setup failures are classified separately and
+must not be accepted as the target failure.
 
 Runtime pins are Python 3.11, Django 5.2.16, asgiref 3.9.2, and sqlparse 0.5.4;
 wheel hashes are recorded in `requirements.lock`. `Dockerfile` builds the

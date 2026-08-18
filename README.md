@@ -44,7 +44,7 @@ Agent 初始形成最多三个可证伪 Hypothesis。每次工具调用必须关
 
 ## 项目状态
 
-项目已完成 MVP Scope Reduction、领域建模、架构设计和 implementation-ready specification。当前提供 CRCA-001 的 Manifest-to-Run walking skeleton；完整诊断状态机和后续工具仍在规划中。
+项目已完成 MVP Scope Reduction、领域建模与架构设计，当前处于实现阶段。CRCA-001 已提供 Manifest-to-Run walking skeleton，CRCA-002 已冻结 django-waffle Task 1，CRCA-003 已提供通用 OpenAI-compatible ModelProvider 与 Model Compatibility Gate；完整诊断状态机、Tool Runtime、RAG、Docker Validation 和 Evaluation Harness 仍在后续规划中。
 
 - [Implementation specification issue](https://github.com/N1rv2na/CodeRCA-agent/issues/1)
 - 目标交付方式：源码安装 + OpenAI-compatible 云端模型 API + 固定 Docker 镜像 + CLI

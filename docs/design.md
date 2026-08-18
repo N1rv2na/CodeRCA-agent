@@ -460,13 +460,16 @@ Evaluation 不调用 LLM Judge，不与 Baseline 比较，不汇总具有泛化�
 
 ### 16.1 纵向优先顺序
 
-1. OpenAI-compatible 模型兼容性门禁；
-2. 一个 Task Manifest 与 FakeModelProvider 纵向骨架；
-3. 最小状态机、阶段 Schema 和五工具运行时；
-4. Task 1 的真实模型、真实工具和 Docker Validation 闭环；
-5. 固定 RAG 管线与 Task 2；
-6. 假设竞争与 Task 3；
-7. Engineering Evaluation、测试、文档和运行产物。
+1. 一个 Task Manifest 与 FakeModelProvider 纵向骨架；
+2. 冻结 django-waffle Task 1 的 Manifest、Faulty Commit、注册命令、CI artifact 与 Evaluation Ground Truth；
+3. OpenAI-compatible 模型兼容性门禁；
+4. 最小状态机、阶段 Schema 和五工具运行时；
+5. Task 1 的真实模型、真实工具和 Docker Validation 闭环；
+6. 固定 RAG 管线与 Task 2；
+7. 假设竞争与 Task 3；
+8. Engineering Evaluation、测试、文档和运行产物。
+
+前三项已经分别由 CRCA-001、CRCA-002 和 CRCA-003 落地。后续实现继续按 Ticket 依赖推进；这里的顺序描述实际纵向切片，不改变最终 MVP 的完成条件。
 
 完整实现不能先于第一个真实纵向闭环。局部组件通过测试但没有真实 Diagnosis Run，不视为 MVP 完成。
 

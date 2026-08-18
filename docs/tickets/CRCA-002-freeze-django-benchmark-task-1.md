@@ -19,7 +19,7 @@ Agent 闭环只有在故障输入可重复、答案不泄漏且测试环境固�
 ## Scope
 
 - 选择并记录一个许可证合适、依赖可固定的开源 Django 仓库快照。
-- 构造或选定 Task 1 的 Faulty Commit、CI 日志和注册测试命令。
+- 构造或选定 Task 1 的 Faulty Commit、清洗后的 Agent 可见 CI artifact 和注册测试命令。
 - 冻结基础快照、容器镜像输入和允许的读写边界。
 - 编写 Task Manifest，并单独记录 Root Symbol、触发条件、故障机制、失败表现和参考修复行为。
 - 验证 Agent 可见材料不包含答案性 commit message、参考补丁或修复后代码。
@@ -38,7 +38,7 @@ Agent 闭环只有在故障输入可重复、答案不泄漏且测试环境固�
 
 1. 按许可证、构建稳定性和测试耗时筛选并冻结仓库版本。
 2. 创建或提取单一业务逻辑缺陷，确定 Faulty Commit。
-3. 捕获稳定 CI 失败输出并注册最小测试命令。
+3. 重复验证注册命令的目标失败语义，并冻结不泄漏答案的规范化 CI artifact。
 4. 固定依赖与 Django 镜像构建输入。
 5. 编写 Task 1 Manifest 和独立 Ground Truth。
 6. 增加重复复现、输入隔离和 Manifest 合法性检查。
@@ -54,7 +54,7 @@ Agent 闭环只有在故障输入可重复、答案不泄漏且测试环境固�
 
 ## Testing Strategy
 
-- 在干净工作区重复执行注册命令并断言稳定失败表现。
+- 在干净工作区重复执行注册命令并断言稳定失败表现；不要求 probe 原始 stderr 与清洗后的 CI artifact 逐字相同。
 - 对 Manifest 和 Ground Truth 分别做 Schema 校验与泄漏检查。
 - 构建冻结镜像并验证 Faulty Commit 能在预期环境复现。
 - 用故意篡改的 commit、命令 ID 和路径验证任务校验会拒绝无效输入。
@@ -83,4 +83,3 @@ Agent 闭环只有在故障输入可重复、答案不泄漏且测试环境固�
 ## Related ADRs
 
 - ADR-0010 — 两周 MVP 采用最小 Docker 执行边界
-

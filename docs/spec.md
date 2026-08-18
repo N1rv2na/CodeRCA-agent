@@ -2,7 +2,7 @@
 
 | 属性 | 内容 |
 |---|---|
-| 状态 | Ready for implementation |
+| 状态 | Implementation in progress（CRCA-001～003 已落地） |
 | 日期 | 2026-08-06 |
 | 权威设计 | [CodeRCA 两周 MVP 设计](design.md) |
 | 产品范围 | 一个冻结 Django 仓库中的业务逻辑回归 |
@@ -169,7 +169,7 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 1. **测试哲学**：测试观察公开契约、领域不变量和外部行为，不断言私有函数调用顺序、Prompt 逐字内容或模型私有思维链。
 2. **最高测试缝**：Diagnosis Application Service 是唯一最高验收缝。测试提交 Diagnosis Task，并观察 Diagnosis Run 结果、结构化事件、Root Cause Report、运行产物、停止原因和失败结果。
 3. **适配器测试**：CLI 与 Evaluation Harness 通过同一应用服务测试，不各自复制完整 Agent 端到端体系。
-4. **测试先例**：仓库当前没有实现或测试文件，因此不存在可复用测试先例；本 specification 建立应用服务主缝和分层测试边界。
+4. **测试先例**：仓库已使用 pytest、Pydantic Contract、FakeModelProvider/Fake HTTP Transport 和本地 loopback HTTP 服务建立 CRCA-001～003 的离线测试先例。后续测试继续优先观察公开合同与产物，并保持默认测试不读取真实 API Key、不访问外部网络。
 5. **FakeModelProvider 闭环**：至少一个确定性测试使用 FakeModelProvider 驱动 Manifest 读取、Hypothesis、工具调用、Evidence、补丁、Validation、报告和运行事件的完整纵向路径。
 6. **真实模型隔离**：默认 CI 不读取 API Key、不访问网络且不需要 GPU。Model Compatibility Gate 和三个真实模型 Agent Evaluation 任务必须显式运行。
 7. **状态机测试**：验证合法与非法阶段转换、终态不可继续执行、不可恢复错误进入 Finalizing，以及真实工具不会在错误阶段调用。
@@ -220,7 +220,7 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 
 - 实现、测试、事件和报告必须使用 `CONTEXT.md` 中的 Diagnosis Task、Task Manifest、Diagnosis Run、Root Cause、Root Cause Candidate、Root Symbol、Hypothesis、Evidence、Experiment、Observation、Validation、Outcome Evaluation 和 Trajectory Evaluation 等规范术语。
 - 当前有效 ADR 为显式状态机、结构化 Tool Runtime、固定混合检索管线、按运行目录持久化、使用本地 Schema 校验与显式 Structured Output Mode 的单一 OpenAI-compatible 云端 ModelProvider，以及最小 Docker 执行边界。旧的检索消融、SQLite、模型兜底、原生 strict Schema 通用最低要求和完整容器控制 ADR 已被取代。
-- 具体开源 Django 仓库、运行时 Model Configuration、embedding 模型、融合权重、reranker、候选数和 Top-K 仍需在实现早期冻结；具体云端模型由操作者选择，不写死在本 specification 中，且选择不得扩大产品范围。
+- Task 1 已冻结为 django-waffle v5.0.0 基础快照及其人工注入 Faulty Commit；Task 2、Task 3、运行时 Model Configuration、embedding 模型、融合权重、reranker、候选数和 Top-K 仍需按后续 Ticket 冻结。具体云端模型由操作者选择，不写死在本 specification 中，且选择不得扩大产品范围。
 - Model Compatibility Gate 是兼容性风险检查，不是 Benchmark 或 Diagnosis Run 授权。若已配置模型在显式 Structured Output Mode 下无法产生通过本地 Schema 校验的阶段对象、工具参数、Evidence 更新和小型补丁，操作者应更换 Model Configuration，而不是增加 Provider 品牌分支或模糊输出修复。
 - MVP 的合理简历表述是“在一个冻结 Django 项目上实现可复用的 Diagnosis Task 工作流，并以三个业务逻辑回归任务验证动态工具选择、Evidence 更新和补丁 Validation”。不得表述为能够泛化诊断任意 Python/Django 项目。
 - 在 GitHub issue tracker 中，本 specification 应使用 `ready-for-agent` 标签。后续 ticket 拆解必须以本文件和权威设计为准，不得从旧研究级 specification 恢复已延期能力。
