@@ -58,6 +58,10 @@ _Avoid_: 无证据猜测、最终结论
 被标注为缺陷位置的函数、方法或类，是位置命中评测的规范单位。
 _Avoid_: 同文件中的任意相关代码、调用链上的任意符号
 
+**Location Description（位置描述）**:
+初始 Hypothesis 尚不能确定 Root Symbol 时使用的可证伪近似代码位置；它必须能够指导后续定位，但不能作为位置命中评测答案。
+_Avoid_: 模糊方向、Root Symbol、任意代码提示
+
 **Hypothesis（假设）**:
 能够被 Evidence 支持并被 Experiment 证伪的 Root Cause 陈述。
 _Avoid_: 最终结论、模型直觉

@@ -6,7 +6,7 @@ import ast
 import json
 import re
 from pathlib import Path
-from typing import Literal, Protocol, TypeVar
+from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, model_validator
@@ -16,6 +16,7 @@ from .model_provider import (
     ModelConfiguration,
     ModelFailureCategory,
     ModelProviderError,
+    StructuredModelProvider,
     StructuredModelResponse,
     StructuredOutputMode,
 )
@@ -93,21 +94,6 @@ class ModelCompatibilityReport(ContractModel):
     compatible: bool
     failure_category: ModelFailureCategory | None = None
     probes: list[ProbeResult] = Field(min_length=1, max_length=5)
-
-
-ProbeModel = TypeVar("ProbeModel", bound=BaseModel)
-
-
-class StructuredModelProvider(Protocol):
-    def generate_structured(
-        self,
-        *,
-        schema_name: str,
-        system_prompt: str,
-        user_prompt: str,
-        response_model: type[ProbeModel],
-    ) -> StructuredModelResponse[ProbeModel]:
-        """Generate one locally validated structured probe response."""
 
 
 class ProbeDefinition(ContractModel):
@@ -219,7 +205,7 @@ def run_model_compatibility_gate(
             artifact = _write_original_response_artifact(
                 response_directory,
                 definition.name,
-                structured_response.raw_response,
+                structured_response.persistence_safe_artifact.value,
             )
             results.append(
                 ProbeResult(
@@ -233,14 +219,14 @@ def run_model_compatibility_gate(
         except ModelProviderError as exc:
             failure_category = exc.category
             artifact_reference: str | None = None
-            original_response = exc.original_response
-            if original_response is None and structured_response is not None:
-                original_response = structured_response.raw_response
-            if original_response is not None:
+            safe_artifact = exc.persistence_safe_artifact
+            if safe_artifact is None and structured_response is not None:
+                safe_artifact = structured_response.persistence_safe_artifact
+            if safe_artifact is not None:
                 artifact = _write_original_response_artifact(
                     response_directory,
                     definition.name,
-                    original_response,
+                    safe_artifact.value,
                 )
                 artifact_reference = str(artifact.relative_to(output_directory))
             results.append(

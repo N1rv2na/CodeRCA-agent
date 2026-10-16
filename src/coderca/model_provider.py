@@ -1,4 +1,4 @@
-"""Model boundary used by the walking skeleton."""
+"""Locally validated structured model boundary for CodeRCA."""
 
 from __future__ import annotations
 
@@ -8,14 +8,12 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import Generic, Literal, Mapping, Protocol, TypeVar
+from typing import Generic, Literal, Mapping, Protocol, Sequence, TypeVar
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, JsonValue, SecretStr, ValidationError
-
-from .contracts import ModelCompletion, TaskManifest
 
 ModelFailureCategory = Literal[
     "configuration_error",
@@ -31,6 +29,13 @@ ModelFailureCategory = Literal[
 ]
 
 
+@dataclass(frozen=True)
+class PersistenceSafeModelArtifact:
+    """Provider-sanitized response value permitted in persisted artifacts."""
+
+    value: object
+
+
 class ModelProviderError(RuntimeError):
     """A provider-boundary failure safe to surface in structured reports."""
 
@@ -40,12 +45,12 @@ class ModelProviderError(RuntimeError):
         message: str,
         details: Mapping[str, object] | None = None,
         *,
-        original_response: object | None = None,
+        persistence_safe_artifact: PersistenceSafeModelArtifact | None = None,
     ) -> None:
         super().__init__(message)
         self.category = category
         self.details = dict(details or {})
-        self.original_response = original_response
+        self.persistence_safe_artifact = persistence_safe_artifact
 
 
 @dataclass(frozen=True)
@@ -234,7 +239,19 @@ ResponseModel = TypeVar("ResponseModel", bound=BaseModel)
 @dataclass(frozen=True)
 class StructuredModelResponse(Generic[ResponseModel]):
     value: ResponseModel
-    raw_response: object
+    persistence_safe_artifact: PersistenceSafeModelArtifact
+
+
+class StructuredModelProvider(Protocol):
+    def generate_structured(
+        self,
+        *,
+        schema_name: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[ResponseModel],
+    ) -> StructuredModelResponse[ResponseModel]:
+        """Return validated state plus a secret-free, persistence-safe artifact."""
 
 
 class OpenAICompatibleModelProvider:
@@ -331,8 +348,8 @@ class OpenAICompatibleModelProvider:
                 "http_error",
                 "The model endpoint returned an unsuccessful HTTP status.",
                 {"status_code": response.status_code},
-                original_response=_response_body_artifact(
-                    response.body, redaction_values
+                persistence_safe_artifact=PersistenceSafeModelArtifact(
+                    _response_body_artifact(response.body, redaction_values)
                 ),
             )
 
@@ -342,8 +359,8 @@ class OpenAICompatibleModelProvider:
             raise ModelProviderError(
                 "invalid_json",
                 "The model endpoint returned invalid JSON.",
-                original_response=_response_body_artifact(
-                    response.body, redaction_values
+                persistence_safe_artifact=PersistenceSafeModelArtifact(
+                    _response_body_artifact(response.body, redaction_values)
                 ),
             ) from exc
 
@@ -351,24 +368,26 @@ class OpenAICompatibleModelProvider:
         try:
             content = _extract_message_content(envelope)
         except ModelProviderError as exc:
-            raise _error_with_original_response(exc, sanitized_envelope) from exc
+            raise _error_with_safe_artifact(exc, sanitized_envelope) from exc
         try:
             decoded_content = json.loads(content)
         except json.JSONDecodeError as exc:
             raise ModelProviderError(
                 "invalid_json",
                 "The model message content was not valid JSON.",
-                original_response=sanitized_envelope,
+                persistence_safe_artifact=PersistenceSafeModelArtifact(
+                    sanitized_envelope
+                ),
             ) from exc
 
         try:
             value = response_model.model_validate(decoded_content)
         except ValidationError as exc:
             error = _schema_mismatch_error(exc)
-            raise _error_with_original_response(error, sanitized_envelope) from exc
+            raise _error_with_safe_artifact(error, sanitized_envelope) from exc
         return StructuredModelResponse(
             value=value,
-            raw_response=sanitized_envelope,
+            persistence_safe_artifact=PersistenceSafeModelArtifact(sanitized_envelope),
         )
 
 
@@ -396,27 +415,41 @@ def _extract_message_content(envelope: object) -> str:
         ) from exc
 
 
-class ModelProvider(Protocol):
-    def complete(self, manifest: TaskManifest) -> ModelCompletion:
-        """Return a structured completion for a manifest."""
-
-
 class FakeModelProvider:
     """Deterministic, no-I/O provider for local development and tests."""
 
     def __init__(
-        self, structured_responses: Mapping[str, object] | None = None
+        self,
+        structured_responses: Mapping[str, object] | None = None,
+        *,
+        structured_response_sequences: Mapping[str, Sequence[object]] | None = None,
     ) -> None:
-        self.structured_responses = dict(structured_responses or {})
+        if structured_responses is None:
+            structured_responses = {
+                "form_hypotheses": {
+                    "hypotheses": [
+                        {
+                            "root_symbol": None,
+                            "location_description": (
+                                "Inspect the failing test and changed code."
+                            ),
+                            "mechanism": (
+                                "A changed branch mishandles the CI failure input."
+                            ),
+                            "falsification_criterion": (
+                                "The changed branch preserves the failing input."
+                            ),
+                        }
+                    ]
+                }
+            }
+        self.structured_responses = dict(structured_responses)
+        self.structured_response_sequences = {
+            name: list(responses)
+            for name, responses in (structured_response_sequences or {}).items()
+        }
         self.structured_calls: list[str] = []
-
-    def complete(self, manifest: TaskManifest) -> ModelCompletion:
-        return ModelCompletion(
-            summary=(
-                "Fake model completed the walking-skeleton diagnosis for "
-                f"task {manifest.task_id}; no root-cause candidates were produced."
-            )
-        )
+        self.structured_requests: list[dict[str, str]] = []
 
     def generate_structured(
         self,
@@ -427,23 +460,31 @@ class FakeModelProvider:
         response_model: type[ResponseModel],
     ) -> StructuredModelResponse[ResponseModel]:
         self.structured_calls.append(schema_name)
-        if schema_name not in self.structured_responses:
+        self.structured_requests.append(
+            {
+                "schema_name": schema_name,
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+            }
+        )
+        response_sequence = self.structured_response_sequences.get(schema_name)
+        if response_sequence:
+            raw_response = response_sequence.pop(0)
+        elif schema_name in self.structured_responses:
+            raw_response = self.structured_responses[schema_name]
+        else:
             raise ModelProviderError(
                 "fake_response_missing",
                 f"No structured fake response is registered for {schema_name}.",
             )
         try:
-            value = response_model.model_validate(
-                self.structured_responses[schema_name]
-            )
+            value = response_model.model_validate(raw_response)
         except ValidationError as exc:
             error = _schema_mismatch_error(exc)
-            raise _error_with_original_response(
-                error, self.structured_responses[schema_name]
-            ) from exc
+            raise _error_with_safe_artifact(error, raw_response) from exc
         return StructuredModelResponse(
             value=value,
-            raw_response=self.structured_responses[schema_name],
+            persistence_safe_artifact=PersistenceSafeModelArtifact(raw_response),
         )
 
 
@@ -458,14 +499,14 @@ def _schema_mismatch_error(error: ValidationError) -> ModelProviderError:
     )
 
 
-def _error_with_original_response(
-    error: ModelProviderError, original_response: object
+def _error_with_safe_artifact(
+    error: ModelProviderError, persistence_safe_value: object
 ) -> ModelProviderError:
     return ModelProviderError(
         error.category,
         str(error),
         error.details,
-        original_response=original_response,
+        persistence_safe_artifact=PersistenceSafeModelArtifact(persistence_safe_value),
     )
 
 

@@ -11,11 +11,12 @@ from typing import Mapping, Protocol, Sequence
 from pydantic import SecretStr
 
 from .contracts import CliError, StructuredError
-from .model_gate import StructuredModelProvider, run_model_compatibility_gate
+from .model_gate import run_model_compatibility_gate
 from .model_provider import (
     ModelConfiguration,
     ModelProviderError,
     OpenAICompatibleModelProvider,
+    StructuredModelProvider,
     load_model_environment,
 )
 

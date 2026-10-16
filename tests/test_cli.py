@@ -3,10 +3,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from pydantic import SecretStr
+
 from coderca.cli import main
+from coderca.model_provider import (
+    FakeModelProvider,
+    ModelConfiguration,
+    StructuredOutputMode,
+)
 
 
-def test_cli_success_prints_terminal_summary_and_run_directory(
+def test_cli_success_prints_hypothesis_stage_and_run_directory(
     tmp_path: Path, valid_manifest_data: dict[str, object], capsys: object
 ) -> None:
     manifest_path = tmp_path / "manifest.json"
@@ -19,11 +26,39 @@ def test_cli_success_prints_terminal_summary_and_run_directory(
     captured = capsys.readouterr()  # type: ignore[attr-defined]
     assert captured.err == ""
     summary = json.loads(captured.out)
-    assert summary["stage"] == "finalizing"
-    assert summary["status"] == "completed"
-    assert summary["stop_reason"] == "fake_model_completed"
+    assert summary["stage"] == "diagnosing"
+    assert summary["status"] == "in_progress"
+    assert summary["stop_reason"] is None
+    assert summary["hypotheses"][0]["hypothesis_id"] == "H1"
     assert summary["run_id"]
     assert summary["task_id"] == "task-001"
+    assert Path(summary["run_directory"]).is_dir()
+
+
+def test_cli_schema_failure_is_observable_and_returns_nonzero(
+    tmp_path: Path, valid_manifest_data: dict[str, object], capsys: object
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(valid_manifest_data), encoding="utf-8")
+    runs_dir = tmp_path / "runs"
+    provider = FakeModelProvider(
+        structured_response_sequences={
+            "form_hypotheses": [{"hypotheses": []}, {"hypotheses": []}]
+        }
+    )
+
+    exit_code = main(
+        [str(manifest_path), "--runs-dir", str(runs_dir)], provider=provider
+    )
+
+    assert exit_code == 1
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    assert captured.err == ""
+    summary = json.loads(captured.out)
+    assert summary["stage"] == "finalizing"
+    assert summary["status"] == "failed"
+    assert summary["stop_reason"] == "schema_failure"
+    assert summary["hypotheses"] == []
     assert Path(summary["run_directory"]).is_dir()
 
 
@@ -45,3 +80,44 @@ def test_cli_invalid_manifest_returns_structured_error_without_run_directory(
     assert error["error"]["message"]
     assert isinstance(error["error"]["details"], list)
     assert not runs_dir.exists()
+
+
+def test_cli_explicit_configured_provider_runs_formation_path_without_network(
+    tmp_path: Path, valid_manifest_data: dict[str, object], capsys: object
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(valid_manifest_data), encoding="utf-8")
+    captured_configuration: dict[str, ModelConfiguration | SecretStr] = {}
+
+    def provider_factory(
+        configuration: ModelConfiguration, api_key: SecretStr
+    ) -> FakeModelProvider:
+        captured_configuration["configuration"] = configuration
+        captured_configuration["api_key"] = api_key
+        return FakeModelProvider()
+
+    exit_code = main(
+        [
+            str(manifest_path),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--model-provider",
+            "openai-compatible",
+        ],
+        environment={
+            "CODERCA_MODEL_BASE_URL": "https://models.example/v1",
+            "CODERCA_MODEL_ID": "example-model",
+            "CODERCA_MODEL_API_KEY": "secret-key",
+            "CODERCA_MODEL_STRUCTURED_OUTPUT_MODE": "json_text",
+        },
+        provider_factory=provider_factory,
+    )
+
+    assert exit_code == 0
+    configuration = captured_configuration["configuration"]
+    api_key = captured_configuration["api_key"]
+    assert isinstance(configuration, ModelConfiguration)
+    assert isinstance(api_key, SecretStr)
+    assert configuration.structured_output_mode is (StructuredOutputMode.JSON_TEXT)
+    assert api_key.get_secret_value() == "secret-key"
+    assert capsys.readouterr().err == ""  # type: ignore[attr-defined]

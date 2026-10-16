@@ -6,17 +6,37 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Protocol, Sequence
 
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from .application import DiagnosisApplicationService
 from .contracts import CliError, StructuredError, TaskManifest
-from .model_provider import FakeModelProvider
+from .model_provider import (
+    FakeModelProvider,
+    ModelConfiguration,
+    ModelProviderError,
+    OpenAICompatibleModelProvider,
+    StructuredModelProvider,
+    load_model_environment,
+)
 from .run_store import RunStore
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+class ProviderFactory(Protocol):
+    def __call__(
+        self, configuration: ModelConfiguration, api_key: SecretStr
+    ) -> StructuredModelProvider:
+        """Build the explicitly configured real ModelProvider."""
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    provider: StructuredModelProvider | None = None,
+    environment: Mapping[str, str] | None = None,
+    provider_factory: ProviderFactory | None = None,
+) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     manifest_path = Path(args.manifest)
@@ -42,8 +62,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
 
+    selected_provider = provider
+    if selected_provider is None and args.model_provider == "openai-compatible":
+        try:
+            configuration, api_key = load_model_environment(environment)
+            factory = provider_factory or _default_provider_factory
+            selected_provider = factory(configuration, api_key)
+        except ModelProviderError as exc:
+            _write_error(
+                StructuredError(
+                    code=exc.category,
+                    message=str(exc),
+                    details=exc.details,
+                )
+            )
+            return 2
+    if selected_provider is None:
+        selected_provider = FakeModelProvider()
+
     service = DiagnosisApplicationService(
-        provider=FakeModelProvider(), run_store=RunStore(Path(args.runs_dir))
+        provider=selected_provider, run_store=RunStore(Path(args.runs_dir))
     )
     result = service.start_diagnosis(manifest)
     summary = {
@@ -53,10 +91,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status": result.status,
         "stop_reason": result.stop_reason,
         "summary": result.summary,
+        "hypotheses": [
+            hypothesis.model_dump(mode="json") for hypothesis in result.hypotheses
+        ],
         "run_directory": str(result.run_directory),
     }
     print(json.dumps(summary, sort_keys=True))
-    return 0
+    return 0 if result.status == "in_progress" else 1
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -67,7 +108,22 @@ def _build_parser() -> argparse.ArgumentParser:
         default=".coderca-runs",
         help="directory in which Diagnosis Run directories are created",
     )
+    parser.add_argument(
+        "--model-provider",
+        choices=("fake", "openai-compatible"),
+        default="fake",
+        help=(
+            "model boundary to use; openai-compatible explicitly loads the "
+            "CODERCA_MODEL_* environment"
+        ),
+    )
     return parser
+
+
+def _default_provider_factory(
+    configuration: ModelConfiguration, api_key: SecretStr
+) -> OpenAICompatibleModelProvider:
+    return OpenAICompatibleModelProvider(configuration, api_key)
 
 
 def _write_error(error: StructuredError) -> None:

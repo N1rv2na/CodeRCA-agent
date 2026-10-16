@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "coderca"
 version = "0.1.0"
-description = "A walking skeleton for CodeRCA diagnosis runs"
+description = "A bounded, hypothesis-driven agent for CI failure diagnosis"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["pydantic>=2.8,<3"]

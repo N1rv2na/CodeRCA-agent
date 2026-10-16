@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from .contracts import DiagnosisEvent, DiagnosisReport, RunArtifacts, TaskManifest
+from .model_provider import PersistenceSafeModelArtifact
 
 
 class RunStore:
@@ -22,6 +23,7 @@ class RunStore:
             manifest_path=run_directory / "manifest.json",
             events_path=run_directory / "events.jsonl",
             report_path=run_directory / "report.json",
+            model_responses_directory=run_directory / "model-responses",
         )
 
     def write_manifest(self, artifacts: RunArtifacts, manifest: TaskManifest) -> None:
@@ -40,6 +42,23 @@ class RunStore:
 
     def write_report(self, artifacts: RunArtifacts, report: DiagnosisReport) -> None:
         self._write_json(artifacts.report_path, report.model_dump(mode="json"))
+
+    def write_hypothesis_formation_response(
+        self,
+        artifacts: RunArtifacts,
+        *,
+        attempt: int,
+        response: PersistenceSafeModelArtifact,
+    ) -> str:
+        if attempt not in (1, 2):
+            raise ValueError("Hypothesis formation attempt must be 1 or 2")
+        artifacts.model_responses_directory.mkdir(parents=True, exist_ok=True)
+        path = (
+            artifacts.model_responses_directory
+            / f"form-hypotheses-attempt-{attempt}.json"
+        )
+        self._write_json(path, response.value)
+        return str(path.relative_to(artifacts.run_directory))
 
     @staticmethod
     def _write_json(path: Path, value: object) -> None:

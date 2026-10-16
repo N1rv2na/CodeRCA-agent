@@ -44,12 +44,12 @@ Agent 初始形成最多三个可证伪 Hypothesis。每次工具调用必须关
 
 ## 项目状态
 
-项目已完成 MVP Scope Reduction、领域建模与架构设计，当前处于实现阶段。CRCA-001 已提供 Manifest-to-Run walking skeleton，CRCA-002 已冻结 django-waffle Task 1，CRCA-003 已提供通用 OpenAI-compatible ModelProvider 与 Model Compatibility Gate；完整诊断状态机、Tool Runtime、RAG、Docker Validation 和 Evaluation Harness 仍在后续规划中。
+项目已完成 MVP Scope Reduction、领域建模与架构设计，当前处于实现阶段。CRCA-001 已提供 Manifest-to-Run walking skeleton，CRCA-002 已冻结 django-waffle Task 1，CRCA-003 已提供通用 OpenAI-compatible ModelProvider 与 Model Compatibility Gate，CRCA-004 已实现受约束的初始 Hypothesis 形成；后续 Tool Runtime、RAG、Docker Validation 和 Evaluation Harness 仍在规划中。
 
 - [Implementation specification issue](https://github.com/N1rv2na/CodeRCA-agent/issues/1)
 - 目标交付方式：源码安装 + OpenAI-compatible 云端模型 API + 固定 Docker 镜像 + CLI
 
-## CRCA-001 本地运行
+## 当前本地运行
 
 使用 Python 3.10 或更高版本创建环境并安装开发依赖：
 
@@ -64,7 +64,22 @@ python -m venv .venv
 .venv/bin/coderca MANIFEST.json --runs-dir .coderca-runs
 ```
 
-命令会输出结构化终态摘要。每个 Diagnosis Run 目录包含 `manifest.json`、`events.jsonl` 和 `report.json`。当前使用确定性的 `FakeModelProvider`，不会调用真实云端模型 API，也不会执行仓库工具或补丁验证。
+命令会形成一至三个带稳定 ID 的初始 Hypothesis，并输出停在 `diagnosing/in_progress` 的结构化状态摘要。每个 Diagnosis Run 目录包含 `manifest.json`、`events.jsonl`、`report.json` 和脱敏模型响应 Artifact。当前 CLI 默认使用确定性的 `FakeModelProvider`，不会调用真实云端模型 API，也不会执行仓库工具或补丁验证。
+
+在 CRCA-003 的 Model Compatibility Gate 已通过后，可显式运行真实模型的 Hypothesis 形成验收；默认命令和自动化测试仍不读取 API Key 或访问网络：
+
+```bash
+export CODERCA_MODEL_BASE_URL="https://your-endpoint.example/v1"
+export CODERCA_MODEL_ID="your-model-id"
+export CODERCA_MODEL_API_KEY="your-api-key"
+export CODERCA_MODEL_STRUCTURED_OUTPUT_MODE="json_text"
+
+.venv/bin/coderca MANIFEST.json \
+  --runs-dir .coderca-runs \
+  --model-provider openai-compatible
+```
+
+需要 Endpoint 专属调用参数时，可另外显式配置 `CODERCA_MODEL_REQUEST_EXTENSIONS`。真实模型命令只验证当前形成阶段；它不会执行诊断工具或补丁验证。
 
 ## 文档
 

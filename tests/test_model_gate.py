@@ -13,6 +13,7 @@ from coderca.model_provider import (
     FakeModelProvider,
     ModelConfiguration,
     ModelProviderError,
+    PersistenceSafeModelArtifact,
     StructuredModelResponse,
     StructuredOutputMode,
     load_model_environment,
@@ -301,7 +302,9 @@ def test_gate_retains_sanitized_original_response_for_failed_probe(
             raise ModelProviderError(
                 "schema_mismatch",
                 "The response failed validation.",
-                original_response={"choices": [], "credential": "[REDACTED]"},
+                persistence_safe_artifact=PersistenceSafeModelArtifact(
+                    {"choices": [], "credential": "[REDACTED]"}
+                ),
             )
 
     output_directory = tmp_path / "gate"

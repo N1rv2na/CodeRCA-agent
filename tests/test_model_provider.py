@@ -284,7 +284,7 @@ def test_provider_sends_strict_chat_completion_and_validates_the_response() -> N
     assert result.value == StageResult(
         stage="hypothesis_generation", next_action="inspect"
     )
-    assert result.raw_response == {
+    assert result.persistence_safe_artifact.value == {
         "provider_metadata": {"echoed_credential": "[REDACTED]"},
         "choices": [
             {
@@ -353,7 +353,7 @@ def test_json_text_mode_omits_response_format_and_validates_raw_json() -> None:
     assert result.value == StageResult(
         stage="hypothesis_generation", next_action="inspect"
     )
-    assert "secret-key" not in json.dumps(result.raw_response)
+    assert "secret-key" not in json.dumps(result.persistence_safe_artifact.value)
     payload = json.loads(transport.requests[0].body)
     assert "response_format" not in payload
     system_content = payload["messages"][0]["content"]
@@ -475,7 +475,7 @@ def test_provider_redacts_echoed_string_request_extension_values() -> None:
         response_model=StageResult,
     )
 
-    serialized = json.dumps(response.raw_response)
+    serialized = json.dumps(response.persistence_safe_artifact.value)
     assert "private-extension-value" not in serialized
     assert "[REDACTED]" in serialized
 
@@ -582,10 +582,12 @@ def test_provider_normalizes_transport_and_envelope_failures(
     assert "secret-key" not in str(raised.value)
     assert "secret-key" not in json.dumps(raised.value.details)
     if expected_category == "invalid_response":
-        assert raised.value.original_response is not None
-        assert "secret-key" not in json.dumps(raised.value.original_response)
+        assert raised.value.persistence_safe_artifact is not None
+        assert "secret-key" not in json.dumps(
+            raised.value.persistence_safe_artifact.value
+        )
     else:
-        assert raised.value.original_response is None
+        assert raised.value.persistence_safe_artifact is None
 
 
 @pytest.mark.parametrize(
@@ -651,8 +653,8 @@ def test_provider_classifies_http_json_and_schema_failures(
     assert raised.value.category == expected_category
     assert "secret-key" not in str(raised.value)
     assert "secret-key" not in json.dumps(raised.value.details)
-    assert raised.value.original_response is not None
-    assert "secret-key" not in json.dumps(raised.value.original_response)
+    assert raised.value.persistence_safe_artifact is not None
+    assert "secret-key" not in json.dumps(raised.value.persistence_safe_artifact.value)
 
 
 def test_default_transport_posts_the_request_with_urllib(
@@ -810,8 +812,8 @@ def test_provider_classifies_fake_http_service_failures(
             )
 
     assert raised.value.category == expected_category
-    assert raised.value.original_response is not None
-    assert "fake-key" not in json.dumps(raised.value.original_response)
+    assert raised.value.persistence_safe_artifact is not None
+    assert "fake-key" not in json.dumps(raised.value.persistence_safe_artifact.value)
 
 
 def test_provider_classifies_fake_http_timeout(
@@ -850,7 +852,7 @@ def test_provider_classifies_fake_http_timeout(
             )
 
     assert raised.value.category == "timeout"
-    assert raised.value.original_response is None
+    assert raised.value.persistence_safe_artifact is None
 
 
 def test_provider_classifies_fake_http_connection_drop(
@@ -885,7 +887,7 @@ def test_provider_classifies_fake_http_connection_drop(
             )
 
     assert raised.value.category == "network_error"
-    assert raised.value.original_response is None
+    assert raised.value.persistence_safe_artifact is None
 
 
 def test_provider_uses_the_standard_library_transport_by_default() -> None:
