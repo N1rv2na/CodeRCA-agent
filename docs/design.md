@@ -11,9 +11,9 @@
 
 ## 1. 摘要
 
-CodeRCA 是一个诊断单仓库 CI 测试失败的 AI Agent 原型。用户提交一个指向 Faulty Commit、CI 日志和注册测试命令的 Diagnosis Task，Agent 通过显式的 Hypothesis–Evidence–Experiment 循环检查变更、检索代码、读取实现、运行测试并验证一个 Top-1 候选补丁，最终生成可追溯的 Root Cause Report。
+CodeRCA 是一个诊断单仓库 CI 测试失败的 AI Agent 原型。用户提交一个指向 Faulty Commit、CI 日志和注册测试命令的 Diagnosis Task，Agent 依次形成并检验一个 Active Hypothesis，通过 Experiment、Observation 和 Evidence 主动尝试证伪；如果当前 Hypothesis 结束，则基于累积诊断知识进行最多两次 Reformulation，最终验证一个受支持 Hypothesis 的候选补丁并生成可追溯的 Root Cause Report。
 
-MVP 的目标不是证明 CodeRCA 在大规模数据集上优于其他系统，也不是交付通用故障平台。它要用一条真实、可检查的纵向闭环证明：模型决策可以被程序约束，工具调用可以服务于可证伪 Hypothesis，Evidence 可以改变候选排序，最终判断可以通过受控 Experiment 和 Validation 获得支持。
+MVP 的目标不是证明 CodeRCA 在大规模数据集上优于其他系统，也不是交付通用故障平台。它要用一条真实、可检查的纵向闭环证明：模型决策可以被程序约束，工具调用可以服务于可证伪 Hypothesis，错误 H1 可以被真实 Evidence 否定，后续 Hypothesis 可以利用已积累知识 Reformulate，最终判断可以通过受控 Experiment 和 Validation 获得支持。
 
 ## 2. 产品定位与成功定义
 
@@ -25,7 +25,7 @@ MVP 的目标不是证明 CodeRCA 在大规模数据集上优于其他系统，�
 2. 结构化 Tool Spec、权限、超时、错误与审计；
 3. 有界上下文和结构化 Agent 状态；
 4. Agent 可调用的代码 RAG；
-5. Docker 中的真实 Experiment 与 Top-1 补丁 Validation；
+5. Docker 中的真实 Experiment 与 supported Hypothesis 补丁 Validation；
 6. 面向结果和轨迹的工程回归 Evaluation。
 
 ### 2.2 MVP 完成条件
@@ -34,8 +34,9 @@ MVP 完成必须同时满足：
 
 - 一个通过 Model Compatibility Gate 检查的已配置 OpenAI-compatible 云端模型能够完成至少一个真实端到端 Diagnosis Run；
 - 五个工具均通过统一契约测试；
-- Agent 能维护最多三个 Hypothesis，并用 Supporting Evidence 和 Contradicting Evidence 更新排序；
-- Agent 能为 Top-1 生成一个可应用补丁，并在 Docker 中运行注册 Validation；
+- Agent 任意时刻最多维护一个 Active Hypothesis，并按 H1、H2、H3 维护 append-only Hypothesis History；
+- Agent 能通过 Contradicting Evidence 拒绝当前 Hypothesis，并在预算内基于累积知识 Reformulate；
+- Agent 能为 supported Hypothesis 生成一个可应用补丁，并在 Docker 中运行注册 Validation；
 - 运行过程保存结构化事件和 Root Cause Report；
 - 三个冻结任务可以执行确定性的 Outcome Evaluation 与 Trajectory Evaluation；
 - 默认自动化测试不依赖真实模型 API、API Key 或网络。
@@ -71,7 +72,7 @@ MVP 完成必须同时满足：
 - Raw Model Baseline、Fixed Pipeline 和大规模 Benchmark；
 - 四路检索消融、参数搜索和统计性 RAG 结论；
 - LLM Judge、大规模隐藏集和重复稳定性实验；
-- Top-3 补丁逐个生成与验证；
+- 多个补丁并行生成与验证；
 - FastAPI、后台 Worker、Web UI 和静态 HTML 报告；
 - SQLite、内容寻址 Artifact、崩溃恢复和事件回放；
 - 本地模型后端、原生厂商 SDK、多真实后端、模型路由、自动选择、回退和运行回放兜底；
@@ -83,10 +84,10 @@ MVP 完成必须同时满足：
 
 1. **Agent 优先**：状态、决策约束和工具语义优先于功能数量。
 2. **Hypothesis 驱动**：每个工具调用必须关联一个活跃 Hypothesis、目的和预期 Observation。
-3. **Evidence 优先**：Root Cause Candidate 的排序来自可追溯 Evidence，不来自模型自报置信度。
+3. **Falsification 优先**：Experiment 优先寻找能够否定当前 Hypothesis 的高信息量 Observation；Evidence 不打分、不排名。
 4. **模型决策、程序约束**：模型提出 Hypothesis、选择 Experiment 和生成补丁；程序校验 Schema、状态、权限、预算和停止条件。
-5. **有界上下文**：每一步从结构化状态重新组装上下文，不无限追加聊天历史。
-6. **真实 Experiment**：至少一个诊断路径必须在 Docker 中运行测试并验证 Top-1 补丁。
+5. **按决策重建上下文**：每一步从结构化状态和相关诊断知识投影 Working Context，不重放完整 Conversation History。
+6. **真实 Experiment**：至少一个诊断路径必须在 Docker 中运行测试并验证 supported Hypothesis 的补丁。
 7. **失败可见**：Schema、模型、工具、沙箱和诊断失败必须留下结构化结果。
 8. **声明不超过证据**：三个任务只证明原型闭环和工程回归，不证明广泛泛化能力。
 
@@ -109,7 +110,7 @@ flowchart LR
 | 边界 | 职责 | 不负责 |
 |---|---|---|
 | Task Intake | 读取 Task Manifest，校验同仓库任务输入 | 任意仓库导入和环境修复 |
-| Diagnosis | 管理 Hypothesis、Evidence、Experiment、排序与停止 | 直接执行命令或读取任意文件 |
+| Diagnosis | 管理 Active Hypothesis、Hypothesis History、Evidence、Experiment、Reformulation 与停止 | 直接执行命令或读取任意文件 |
 | Model | 通过 OpenAI-compatible Chat Completions 协议请求阶段决策 | 模型托管、厂商原生 SDK、路由和回退 |
 | Tool Runtime | Schema、权限、超时、错误和审计 | Root Cause 推理 |
 | Retrieval | 构建并查询固定代码索引 | 选择最终 Root Cause |
@@ -139,22 +140,24 @@ Agent 可见输入不得包含 Root Symbol 标准答案、参考补丁、修复�
 
 Diagnosis Run 是 Agent 对一个 Diagnosis Task 的一次执行。它拥有：
 
-- 最多三个初始 Hypothesis；
+- 按 H1、H2、H3 追加的 Hypothesis History；
+- 零个或一个 Active Hypothesis；
 - Supporting Evidence 和 Contradicting Evidence；
 - Experiment 与 Observation；
-- 当前候选排序；
 - 已用工具预算；
-- Top-1 候选补丁及 Validation；
+- supported Hypothesis 的候选补丁及 Validation；
 - 停止原因和 Root Cause Report。
 
 关键不变量：
 
-- 工具调用必须关联一个未被拒绝的 Hypothesis；
-- 同时存在的 Hypothesis 不超过三个；
-- 初始候选形成后不动态补充、替换或重新激活；
+- 工具调用只能关联当前 Active Hypothesis；
+- 任意时刻 Active Hypothesis 不超过一个；
+- Hypothesis ID 只能由程序按 H1、H2、H3 分配，History append-only；
+- 只有当前 Hypothesis 进入 `rejected` 或 `inconclusive` 且预算剩余时才能 Reformulate；
+- rejected Hypothesis 不得复活、覆盖或重新定义，H3 之后不得形成 H4；
 - Evidence 必须引用工具结果或输入 artifact；
-- Evidence Score 只用于排序，不表示概率；
-- 只有 Top-1 可以生成正式候选补丁；
+- Evidence 只有方向、来源和解释，不包含数值 Score 或 Ranking；
+- 只有 supported Hypothesis 可以生成正式候选补丁；
 - 一次 Diagnosis Run 最多调用八次工具；
 - 真实仓库保持只读，修改只发生在临时工作区。
 
@@ -162,9 +165,9 @@ Diagnosis Run 是 Agent 对一个 Diagnosis Task 的一次执行。它拥有：
 
 最小报告包含：
 
-- Top-1/Top-3 Root Cause Candidate；
-- 每个候选的文件、Root Symbol 和简短故障机制；
-- Top-1 的触发条件、故障机制和失败表现；
+- 最终 supported Hypothesis 的文件、Root Symbol 和简短故障机制；
+- 触发条件、传播路径、故障机制和失败表现；
+- H1～H3 Hypothesis History 及每个条目的终态；
 - Supporting Evidence 与 Contradicting Evidence 引用；
 - 修复建议、候选补丁和 Validation 结果；
 - 停止原因。
@@ -178,28 +181,30 @@ Diagnosis Run 是 Agent 对一个 Diagnosis Task 的一次执行。它拥有：
 ```mermaid
 stateDiagram-v2
     [*] --> Preparing
-    Preparing --> FormingHypotheses: task valid
+    Preparing --> FormingHypothesis: task valid
     Preparing --> Finalizing: invalid or environment failure
-    FormingHypotheses --> Diagnosing: 1..3 hypotheses
+    FormingHypothesis --> Diagnosing: append H1/H2/H3
     Diagnosing --> ExecutingTool: valid experiment decision
     ExecutingTool --> UpdatingEvidence: observation recorded
-    UpdatingEvidence --> Diagnosing: budget remains and candidates remain
-    UpdatingEvidence --> ValidatingTop1: diagnosis ready
-    UpdatingEvidence --> Finalizing: budget exhausted or candidates exhausted
-    ValidatingTop1 --> Finalizing: validation recorded
+    UpdatingEvidence --> Diagnosing: hypothesis remains plausible
+    UpdatingEvidence --> FormingHypothesis: rejected or inconclusive, budget remains
+    UpdatingEvidence --> Validating: sufficiently supported
+    UpdatingEvidence --> Finalizing: H3 ended or tool budget exhausted
+    Validating --> Finalizing: validation recorded
     Finalizing --> [*]
 ```
 
-状态机只控制生命周期与不变量。`Diagnosing → ExecutingTool → UpdatingEvidence` 是受约束 ReAct 循环：模型观察当前状态，选择下一 Experiment；程序执行工具并记录 Observation；模型再更新 Evidence 与候选判断。
+状态机只控制生命周期与不变量。`Diagnosing → ExecutingTool → UpdatingEvidence` 是受约束 ReAct 循环：模型选择针对 Active Hypothesis 的下一 Experiment；程序执行工具并记录 Observation；模型解释 Evidence 并提交 Assessment；程序校验 Evidence 引用、Budget 与合法转换后更新状态。
 
 ### 7.2 阶段输出 Schema
 
 模型不填写一个万能决策对象。各阶段使用字段较少的独立 Schema：
 
-- `FormHypothesesDecision`：形成一至三个可证伪 Hypothesis；
+- `FormHypothesisDecision`：形成一个不带 ID 的可证伪 Hypothesis Proposal；
 - `SelectExperimentDecision`：选择 Hypothesis、工具、目的、预期 Observation 和参数；
 - `UpdateEvidenceDecision`：将 Observation 解释为支持、反对或无信息 Evidence；
-- `PatchDecision`：为当前 Top-1 生成一个候选补丁；
+- `HypothesisAssessmentDecision`：基于 Evidence 提议继续、falsified、sufficiently supported 或 inconclusive；
+- `PatchDecision`：为 supported Hypothesis 生成一个候选补丁；
 - `ReportDecision`：补全最小 Root Cause Report 的因果字段。
 
 Schema 校验失败时保存原始响应与错误，并允许一次明确纠错；再次失败产生 Schema Failure 并停止当前 Diagnosis Run。禁止通过模糊正则猜测模型意图。
@@ -208,39 +213,34 @@ Schema 校验失败时保存原始响应与错误，并允许一次明确纠错�
 
 满足任一条件即进入 `Finalizing`：
 
-- Top-1 补丁完成 Validation；
+- supported Hypothesis 补丁完成 Validation；
 - 达到八次工具调用；
-- 所有 Hypothesis 均为 `rejected` 或 `inconclusive`；
+- H3 进入 `rejected` 或 `inconclusive`；
 - 纠错后仍发生 Schema Failure；
 - 模型、工具或沙箱发生不可恢复错误。
 
 CLI 在状态机外设置一次总运行超时。MVP 不同时维护 Token、费用和多级时间预算。
 
-### 7.4 Evidence Score
+### 7.4 Hypothesis Evaluation 与 Reformulation
 
-程序使用少量固定整数权重，根据 Evidence 的方向和来源更新候选顺序。来源强度从高到低为：
+Observation 不直接改变 Hypothesis 生命周期。模型先把 Observation 解释为带 provenance 的 Supporting、Contradicting 或 Inconclusive Evidence，再提交引用具体 Evidence ID 的结构化 Assessment。程序检查所有引用属于当前 Active Hypothesis，并将 `falsified`、`sufficiently_supported` 等 Assessment 映射到合法状态；模型不能分配 ID、写入状态或维护 Budget。
 
-1. 可复现的测试或补丁 Experiment；
-2. 直接代码、堆栈或失败断言；
-3. Git diff 关联；
-4. 检索相似性。
-
-Contradicting Evidence 使用对应负权重。具体整数在实现前冻结并接受单元测试，不进行学习、概率校准或数据集调参。
+H1 可基于 Task 与 CI Failure 形成。H2/H3 必须引用推动 Reformulation 的 Evidence，并看到已经结束的 Hypothesis History、相关代码/diff/测试 Observation 和剩余预算；不得仅换一种措辞重复 rejected 机制。
 
 ## 8. 上下文工程与模型边界
 
-### 8.1 有界状态快照
+### 8.1 Decision-Specific Reconstructed Working Context
 
-每次模型调用重新组装上下文，只包含：
+Agent State 是真相源，Working Context 是当前 Decision 对结构化状态的确定性投影。每次模型调用重新构造 Context，但不同 Decision 只包含必要信息：
 
-- Diagnosis Task 摘要和边界；
-- 最多三个 Hypothesis 及状态；
-- 结构化 Evidence 摘要与引用；
-- 最近一次 Observation；
-- 剩余工具调用预算；
-- 当前阶段需要的少量日志或代码片段。
+- Form H1：Task Context、CI Failure、空 History 和剩余预算；
+- Select Experiment：Active Hypothesis、Falsification Criterion、相关 Evidence/Observation 与 Tool Budget；
+- Update Evidence：Active Hypothesis、Current Experiment、Expected Observation、Latest Observation 和已有相关 Evidence；
+- Assess Hypothesis：Active Hypothesis、相关 Evidence/Observation 与剩余预算；
+- Reformulate H2/H3：原始 Task、已经结束的 Hypothesis History、否定当前机制的 Evidence、相关代码/diff/测试事实和剩余预算；
+- Validation：supported Hypothesis、相关 Evidence、代码/测试 Observation 与修复上下文。
 
-原始 CI 日志、完整代码、测试输出和模型响应保存在运行目录。MVP 不实现自动摘要、长期记忆、Artifact 召回或完整历史重放。
+选择规则使用 Hypothesis ID、固定字段、固定条数和字符长度限制。完整 CI 日志、代码、测试输出、Tool Result 和 Model Response 保存在 Run Artifact 中；Structured State 只保存 Observation/Evidence 及引用。MVP 不实现自动摘要、语义记忆检索、长期记忆、通用 Token Optimizer 或完整 Conversation History replay。
 
 ### 8.2 ModelProvider
 
@@ -349,10 +349,10 @@ MVP 使用一个预构建 Django Docker 镜像。每次执行创建临时工作�
 
 该边界只用于降低正常测试造成意外副作用的风险，不承诺抵御恶意代码、容器逃逸或生产多租户攻击。完整 CPU/内存配额、只读根文件系统矩阵和跨平台兼容延期。
 
-### 11.2 Top-1 补丁流程
+### 11.2 Supported Hypothesis 补丁流程
 
-1. Agent 完成候选排序；
-2. 当前 Top-1 生成一个候选补丁；
+1. 当前 Active Hypothesis 经 Evidence Assessment 进入 `supported`；
+2. supported Hypothesis 生成一个候选补丁；
 3. Tool Runtime 校验修改路径；
 4. `apply_patch` 在临时工作区应用补丁；
 5. `run_tests` 执行注册 Validation；
@@ -393,7 +393,7 @@ CLI 支持：
 |---|---|---|
 | Task 1 | 变更证据 | 主要通过 diff 与代码阅读定位 Root Cause |
 | Task 2 | RAG 证据 | Root Symbol 不由堆栈直接命中，需要混合检索 |
-| Task 3 | Experiment 证据 | 至少两个合理候选，需要测试 Observation 排除错误候选 |
+| Task 3 | Self-Correction 证据 | 初始 H1 错误，通过测试 Observation 否定 H1 并 Reformulate H2 |
 
 Task 1 用于开发和必要时的现场运行；Task 2 用于工作流回归；Task 3 在核心 Prompt、Schema 和工具策略基本冻结后运行，作为有限的未见故障检查。三个任务均为人工注入的业务逻辑回归，不寻找真实历史修复 commit。
 
@@ -405,7 +405,7 @@ Evaluation Harness 调用 Diagnosis Application Service，并输出逐任务检�
 
 ### 14.1 Outcome Evaluation
 
-- Top-1 Root Symbol 是否精确命中；
+- 最终 supported Hypothesis 的 Root Symbol 是否精确命中；
 - 候选补丁是否可应用；
 - 注册 Validation 是否通过；
 - Root Cause Report 是否包含必需结构化字段。
@@ -418,7 +418,10 @@ Evaluation Harness 调用 Diagnosis Application Service，并输出逐任务检�
 - Supporting 和 Contradicting 方向是否合法；
 - 是否遵守八次工具预算；
 - 是否产生合法停止原因；
-- 只有 Top-1 是否进入补丁 Validation。
+- 是否只有 supported Hypothesis 进入补丁 Validation；
+- 任意时刻是否最多一个 Active Hypothesis；
+- 是否只有结束当前 H 后才形成下一个，且 History 未超过 H3；
+- Reformulation 是否引用否定旧 H 的 Evidence 与相关 Observation。
 
 Evaluation 不调用 LLM Judge，不与 Baseline 比较，不汇总具有泛化暗示的成功率。因果解释由作者依据冻结答案进行人工核查，自动化 Harness 只验证结构和确定性字段。
 
@@ -427,11 +430,12 @@ Evaluation 不调用 LLM Judge，不与 Baseline 比较，不汇总具有泛化�
 ### 15.1 单元测试
 
 - 状态转移和非法转换；
-- 最多三个 Hypothesis；
-- Evidence Score 单调关系和反证扣分；
+- 单 Active Hypothesis 与 append-only H1～H3 History；
+- rejected 不可复活、reject-before-reformulate 和 no-H4；
+- Assessment 必须引用当前 H 的真实 Evidence；
 - 八次工具预算和停止条件；
 - 各阶段 Schema 与一次纠错；
-- 有界上下文快照。
+- decision-specific reconstructed Working Context。
 
 ### 15.2 工具契约测试
 
@@ -466,7 +470,7 @@ Evaluation 不调用 LLM Judge，不与 Baseline 比较，不汇总具有泛化�
 4. 最小状态机、阶段 Schema 和五工具运行时；
 5. Task 1 的真实模型、真实工具和 Docker Validation 闭环；
 6. 固定 RAG 管线与 Task 2；
-7. 假设竞争与 Task 3；
+7. bounded self-correction 与 Task 3；
 8. Engineering Evaluation、测试、文档和运行产物。
 
 前三项已经分别由 CRCA-001、CRCA-002 和 CRCA-003 落地。后续实现继续按 Ticket 依赖推进；这里的顺序描述实际纵向切片，不改变最终 MVP 的完成条件。
@@ -479,9 +483,9 @@ Evaluation 不调用 LLM Judge，不与 Baseline 比较，不汇总具有泛化�
 
 1. 删除 reranker，保留 BM25 与向量混合；
 2. 将冻结任务从三个减少为两个；
-3. 报告从 Top-3 减少为 Top-1，但内部仍保留多个 Hypothesis。
+3. 将冻结任务从两个进一步减少为只保留 Task 1 的完整闭环。
 
-不得削减：最小状态机、五工具协议、已配置的真实云端模型、一个 Docker Experiment 和 Top-1 补丁 Validation。
+不得削减：最小状态机、单 Active Hypothesis 不变量、五工具协议、已配置的真实云端模型、一个 Docker Experiment 和 supported Hypothesis 补丁 Validation。
 
 ## 17. 主要风险
 
@@ -491,12 +495,12 @@ Evaluation 不调用 LLM Judge，不与 Baseline 比较，不汇总具有泛化�
 | 三个任务仍过度定制 | 招聘证据被质疑 | 三种不同必要路径；Task 3 延后运行；公开逐任务轨迹 |
 | 固定 RAG 管线环境复杂 | 首个闭环延期 | Task 1 可先用最小搜索接缝；第七天先删除 reranker |
 | Docker 在 WSL/开发机行为不一致 | Validation 不稳定 | 单镜像、单仓库、注册命令和统一超时 |
-| 已配置模型输出不可应用补丁 | 核心验证失败 | 早期补丁探针；只允许一个小型 Top-1 补丁 |
+| 已配置模型输出不可应用补丁 | 核心验证失败 | 早期补丁探针；只允许一个 supported Hypothesis 的小型补丁 |
 | Scope 再次膨胀 | 两周无法交付 | 延期列表和不可削减核心作为变更门禁 |
 
 ## 18. 架构决策记录
 
-- [ADR-0001：显式诊断状态机](adr/0001-explicit-diagnosis-state-machine.md)
+- [ADR-0014：单 Active Hypothesis 与按决策重建上下文](adr/0014-single-active-hypothesis-reconstructed-context.md)，取代 ADR-0001
 - [ADR-0002：结构化 Tool Runtime 且不实现 MCP](adr/0002-typed-tool-runtime.md)
 - [ADR-0007：固定混合检索管线](adr/0007-fixed-retrieval-pipeline.md)，取代 ADR-0003
 - [ADR-0008：按运行目录持久化](adr/0008-run-directory-persistence.md)，取代 ADR-0005

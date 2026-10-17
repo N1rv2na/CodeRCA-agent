@@ -50,10 +50,6 @@ _Avoid_: 跨进程授权、模型质量排名
 导致可观察失败的缺陷位置与因果机制的组合。
 _Avoid_: 错误日志、失败断言、仅有代码位置
 
-**Root Cause Candidate（根因候选）**:
-尚待验证或已经验证，并参与 Top-1/Top-3 排序的潜在 Root Cause。
-_Avoid_: 无证据猜测、最终结论
-
 **Root Symbol（根因符号）**:
 被标注为缺陷位置的函数、方法或类，是位置命中评测的规范单位。
 _Avoid_: 同文件中的任意相关代码、调用链上的任意符号
@@ -66,9 +62,17 @@ _Avoid_: 模糊方向、Root Symbol、任意代码提示
 能够被 Evidence 支持并被 Experiment 证伪的 Root Cause 陈述。
 _Avoid_: 最终结论、模型直觉
 
+**Active Hypothesis（活跃假设）**:
+当前正在被形成或检验的唯一 Hypothesis；一次 Diagnosis Run 在任意时刻最多存在一个。
+_Avoid_: 候选集合、并行假设、Top-1 Candidate
+
+**Hypothesis History（假设历史）**:
+按 H1、H2、H3 顺序追加且不可覆盖的 Hypothesis 记录；已结束的条目不得复活或重新定义。
+_Avoid_: Candidate Pool、可变候选列表、Conversation History
+
 **Evidence（证据）**:
-具有可追溯来源、方向和强度，能够改变某个 Hypothesis 可信度的信息记录。
-_Avoid_: 模型自信度、无引用解释、一般知识
+引用 Observation、具有可追溯来源、方向和解释，用于判断一个 Hypothesis 是否仍可成立的信息记录。
+_Avoid_: Evidence Score、模型自信度、无引用解释、一般知识
 
 **Supporting Evidence（支持证据）**:
 提高某个 Hypothesis 可信度的 Evidence。
@@ -79,16 +83,20 @@ _Avoid_: 已经证明假设
 _Avoid_: 普通工具错误、没有产生新信息的失败
 
 **Experiment（实验）**:
-为区分、支持或证伪 Hypothesis 而执行，并预先声明预期观察的受控动作。
+为主动证伪 Active Hypothesis 而执行，并预先声明目的、预期观察和证伪关联的受控动作。
 _Avoid_: 任意工具调用、无预期结果的探索
 
 **Observation（观察结果）**:
 Experiment 实际产生且可以被引用的结果。
 _Avoid_: Agent 对结果的解释、未执行的预期
 
-**Evidence Score（证据分数）**:
-根据支持与反对 Evidence 计算、仅用于 Root Cause Candidate 排序的规则分数。
-_Avoid_: 校准概率、模型置信概率
+**Working Context（工作上下文）**:
+为当前 Model Decision 从 Diagnosis Task、结构化 Diagnosis State、相关 Evidence、选定 Observation 和最新 Observation 确定性重建的有界视图。
+_Avoid_: 完整 Conversation History、Agent State、Raw Artifact 集合
+
+**Run Artifact（运行产物）**:
+为审计而保存在 Diagnosis Run 目录中的完整模型响应、工具结果、代码、日志、补丁或 Validation 输出。
+_Avoid_: Working Context、结构化 Diagnosis State、长期记忆
 
 ### 修复验证
 
@@ -111,7 +119,7 @@ _Avoid_: Agent 可反复迭代的测试、公开测试
 _Avoid_: Task Manifest、Agent Evidence、参考 Prompt
 
 **Outcome Evaluation（结果评测）**:
-检查 Diagnosis Run 的 Root Cause、候选补丁、Validation 和报告契约是否满足冻结任务的确定性预期。
+检查 Diagnosis Run 的最终 Root Cause、候选补丁、Validation 和报告契约是否满足冻结任务的确定性预期。
 _Avoid_: Trajectory Evaluation、统计泛化结论
 
 **Trajectory Evaluation（轨迹评测）**:

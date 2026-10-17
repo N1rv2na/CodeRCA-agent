@@ -11,6 +11,7 @@ from typing import Mapping, Protocol, Sequence
 from pydantic import SecretStr, ValidationError
 
 from .application import DiagnosisApplicationService
+from .context_builder import resolve_task_context
 from .contracts import CliError, StructuredError, TaskManifest
 from .model_provider import (
     FakeModelProvider,
@@ -62,6 +63,18 @@ def main(
         )
         return 2
 
+    try:
+        task = resolve_task_context(manifest, manifest_path.parent)
+    except (OSError, UnicodeError, ValueError) as exc:
+        _write_error(
+            StructuredError(
+                code="task_input_error",
+                message="Diagnosis Task artifacts could not be resolved.",
+                details={"path": manifest.ci_log, "reason": str(exc)},
+            )
+        )
+        return 2
+
     selected_provider = provider
     if selected_provider is None and args.model_provider == "openai-compatible":
         try:
@@ -83,7 +96,7 @@ def main(
     service = DiagnosisApplicationService(
         provider=selected_provider, run_store=RunStore(Path(args.runs_dir))
     )
-    result = service.start_diagnosis(manifest)
+    result = service.start_diagnosis(task)
     summary = {
         "run_id": result.run_id,
         "task_id": result.task_id,
@@ -91,9 +104,18 @@ def main(
         "status": result.status,
         "stop_reason": result.stop_reason,
         "summary": result.summary,
-        "hypotheses": [
-            hypothesis.model_dump(mode="json") for hypothesis in result.hypotheses
+        "hypothesis_history": [
+            hypothesis.model_dump(mode="json")
+            for hypothesis in result.hypothesis_history
         ],
+        "active_hypothesis": next(
+            (
+                hypothesis.model_dump(mode="json")
+                for hypothesis in result.hypothesis_history
+                if hypothesis.status in {"proposed", "testing"}
+            ),
+            None,
+        ),
         "run_directory": str(result.run_directory),
     }
     print(json.dumps(summary, sort_keys=True))

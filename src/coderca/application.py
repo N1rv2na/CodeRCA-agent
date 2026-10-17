@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from uuid import uuid4
 
+from .context_builder import ContextBuilder, DiagnosisTaskContext
 from .contracts import (
     DiagnosisEvent,
     DiagnosisEventFailureCategory,
@@ -12,7 +13,7 @@ from .contracts import (
     DiagnosisReport,
     DiagnosisRunResult,
     DiagnosisStage,
-    FormHypothesesDecision,
+    FormHypothesisDecision,
     RunArtifacts,
     TaskManifest,
 )
@@ -20,9 +21,8 @@ from .diagnosis_state import DiagnosisStateMachine
 from .model_provider import ModelProviderError, StructuredModelProvider
 from .run_store import RunStore
 
-_CI_EXCERPT_LIMIT = 2_000
 _FORMATION_SYSTEM_PROMPT = (
-    "Form one to three falsifiable Root Cause Hypotheses. Return only the "
+    "Form one falsifiable Root Cause Hypothesis. Return only the "
     "requested structured object; do not include private reasoning."
 )
 _INFRASTRUCTURE_FAILURES = {"timeout", "network_error", "http_error"}
@@ -33,7 +33,8 @@ class DiagnosisApplicationService:
         self.provider = provider
         self.run_store = run_store
 
-    def start_diagnosis(self, manifest: TaskManifest) -> DiagnosisRunResult:
+    def start_diagnosis(self, task: DiagnosisTaskContext) -> DiagnosisRunResult:
+        manifest = task.manifest
         run_id = str(uuid4())
         artifacts = self.run_store.create_run(run_id)
         self.run_store.write_manifest(artifacts, manifest)
@@ -49,7 +50,7 @@ class DiagnosisApplicationService:
                 message="Diagnosis Run accepted and Manifest snapshot persisted.",
             )
         ]
-        state.transition_to(DiagnosisStage.FORMING_HYPOTHESES)
+        state.begin_hypothesis_formation()
         events.append(
             DiagnosisEvent(
                 sequence=2,
@@ -57,19 +58,19 @@ class DiagnosisApplicationService:
                 run_id=run_id,
                 task_id=manifest.task_id,
                 stage=state.stage,
-                message="Diagnosis Run is forming bounded initial Hypotheses.",
+                message="Diagnosis Run is forming the initial Active Hypothesis.",
             )
         )
         correction: dict[str, object] | None = None
         for attempt in (1, 2):
             try:
                 structured_response = self.provider.generate_structured(
-                    schema_name="form_hypotheses",
+                    schema_name="form_hypothesis",
                     system_prompt=_FORMATION_SYSTEM_PROMPT,
                     user_prompt=_build_formation_context(
-                        manifest, state, correction=correction
+                        task, state, correction=correction
                     ),
-                    response_model=FormHypothesesDecision,
+                    response_model=FormHypothesisDecision,
                 )
                 break
             except ModelProviderError as exc:
@@ -126,17 +127,17 @@ class DiagnosisApplicationService:
             attempt=attempt,
             response=structured_response.persistence_safe_artifact,
         )
-        hypotheses = state.form_initial_hypotheses(structured_response.value)
-        summary = f"Formed {len(hypotheses)} bounded initial Hypotheses."
+        hypothesis = state.form_hypothesis(structured_response.value)
+        summary = f"Formed initial Active Hypothesis {hypothesis.hypothesis_id}."
         events.append(
             DiagnosisEvent(
                 sequence=len(events) + 1,
-                event_type="hypotheses_formed",
+                event_type="hypothesis_formed",
                 run_id=run_id,
                 task_id=manifest.task_id,
                 stage=state.stage,
                 message=summary,
-                hypotheses=list(hypotheses),
+                hypothesis_history=list(state.hypothesis_history),
                 model_response_artifact=response_artifact,
             )
         )
@@ -146,7 +147,7 @@ class DiagnosisApplicationService:
             stage=DiagnosisStage.DIAGNOSING,
             status="in_progress",
             summary=summary,
-            hypotheses=list(hypotheses),
+            hypothesis_history=list(state.hypothesis_history),
         )
         self.run_store.write_events(artifacts, events)
         self.run_store.write_report(artifacts, report)
@@ -156,7 +157,7 @@ class DiagnosisApplicationService:
             stage=DiagnosisStage.DIAGNOSING,
             status="in_progress",
             summary=summary,
-            hypotheses=hypotheses,
+            hypothesis_history=state.hypothesis_history,
             run_directory=artifacts.run_directory,
             manifest_path=artifacts.manifest_path,
             events_path=artifacts.events_path,
@@ -219,35 +220,12 @@ class DiagnosisApplicationService:
 
 
 def _build_formation_context(
-    manifest: TaskManifest,
+    task: DiagnosisTaskContext,
     state: DiagnosisStateMachine,
     *,
     correction: dict[str, object] | None = None,
 ) -> str:
-    ci_excerpt = manifest.ci_log[:_CI_EXCERPT_LIMIT]
-    context = {
-        "diagnosis_task": {
-            "task_id": manifest.task_id,
-            "repository_id": manifest.repository_id,
-            "faulty_commit": manifest.faulty_commit,
-            "base_snapshot": manifest.base_snapshot,
-            "test_command_id": manifest.test_command_id,
-            "execution_boundary": {
-                "docker_image": manifest.docker_image,
-                "read_paths": manifest.read_paths,
-                "write_paths": manifest.write_paths,
-                "remaining_tool_calls": manifest.tool_call_limit,
-            },
-            "ci_failure": {
-                "excerpt": ci_excerpt,
-                "truncated": len(manifest.ci_log) > len(ci_excerpt),
-            },
-        },
-        "diagnosis_state": {
-            "stage": state.stage.value,
-            "hypotheses": [item.model_dump(mode="json") for item in state.hypotheses],
-        },
-    }
+    context = ContextBuilder().build_form_hypothesis(task, state)
     if correction is not None:
         context["schema_correction"] = correction
     return json.dumps(context, sort_keys=True)

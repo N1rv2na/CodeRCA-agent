@@ -17,11 +17,11 @@
 
 ## Solution
 
-CodeRCA 提供一个本机 CLI。用户提交符合 Schema 的 Task Manifest，描述同一冻结 Django 仓库中的 Faulty Commit、CI 日志、注册测试命令、Docker 镜像和执行边界。Diagnosis Application Service 创建 Diagnosis Run，并由最小显式状态机控制生命周期；诊断循环内部使用受约束 ReAct，让操作者配置的 OpenAI-compatible 云端模型提出最多三个 Hypothesis、选择 Experiment、解释 Observation 和更新 Evidence。
+CodeRCA 提供一个本机 CLI。用户提交符合 Schema 的 Task Manifest，描述同一冻结 Django 仓库中的 Faulty Commit、CI 日志、注册测试命令、Docker 镜像和执行边界。Diagnosis Application Service 创建 Diagnosis Run，并由最小显式状态机控制生命周期；诊断循环内部使用受约束 ReAct，让操作者配置的 OpenAI-compatible 云端模型一次提出和检验一个 Active Hypothesis、选择 falsification-oriented Experiment、解释 Observation 和更新 Evidence。
 
-Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运行测试和应用补丁。代码检索使用固定的 Python AST 分块、BM25/向量混合和 CPU reranker 管线。每个工具调用必须关联一个活跃 Hypothesis、调用目的和预期 Observation。程序负责 Schema、权限、超时、错误、Evidence Score、八次工具预算和停止条件。
+Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运行测试和应用补丁。代码检索使用固定的 Python AST 分块、BM25/向量混合和 CPU reranker 管线。每个工具调用必须关联当前 Active Hypothesis、调用目的、预期 Observation 和证伪关联。程序负责 Schema、稳定 ID、状态、权限、超时、Hypothesis/Tool Budget 和停止条件；Evidence 不计算数值 Score。
 
-诊断完成后，系统只为 Top-1 Root Cause Candidate 生成一个候选补丁，并在最小 Docker 执行边界中运行注册 Validation。CLI 输出实时摘要，完整事件、模型响应、工具结果、补丁和 Root Cause Report 保存到独立运行目录。三个冻结任务分别验证 diff/代码证据、RAG 证据和测试 Experiment 路径；Evaluation Harness 只进行确定性的 Outcome Evaluation 与 Trajectory Evaluation，不产生统计性泛化结论。
+诊断完成后，系统只为最终 supported Hypothesis 生成一个候选补丁，并在最小 Docker 执行边界中运行注册 Validation。CLI 输出实时摘要，完整事件、模型响应、工具结果、补丁和 Root Cause Report 保存到独立运行目录。三个冻结任务分别验证 diff/代码证据、RAG 证据和错误 H1 的 bounded self-correction；Evaluation Harness 只进行确定性的 Outcome Evaluation 与 Trajectory Evaluation，不产生统计性泛化结论。
 
 ## User Stories
 
@@ -32,14 +32,14 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 3. 作为后端工程师，我希望系统在运行前校验任务是否属于受支持仓库和环境，从而避免把环境错误误认为诊断失败。
 4. 作为后端工程师，我希望通过 CLI 启动 Diagnosis Run，从而无需部署服务或使用 Web UI。
 5. 作为后端工程师，我希望 CLI 显示当前生命周期状态，从而知道系统正在形成 Hypothesis、执行工具、更新 Evidence 还是验证补丁。
-6. 作为后端工程师，我希望查看最多三个 Root Cause Candidate，从而理解 Agent 考虑了哪些可能根因。
-7. 作为后端工程师，我希望每个候选包含 Root Symbol 和简短故障机制，从而能快速检查位置与解释是否合理。
-8. 作为后端工程师，我希望 Supporting Evidence 与 Contradicting Evidence 分开显示，从而区分支持结论和排除候选的依据。
+6. 作为后端工程师，我希望查看 append-only H1～H3 Hypothesis History，从而理解 Agent 如何检验和修正诊断方向。
+7. 作为后端工程师，我希望每个 Hypothesis 包含位置、机制、证伪标准和终态，从而能检查其是否可验证。
+8. 作为后端工程师，我希望 Supporting Evidence 与 Contradicting Evidence 分开显示，从而区分继续检验、支持结论和否定旧 Hypothesis 的依据。
 9. 作为后端工程师，我希望每次 Experiment 说明所属 Hypothesis、目的和预期 Observation，从而判断工具调用是否具有诊断价值。
 10. 作为后端工程师，我希望代码 Evidence 引用文件、符号和行区间，从而能够追溯到原始实现。
 11. 作为后端工程师，我希望测试 Evidence 引用实际命令和输出，从而确认结论来自真实执行而非模型猜测。
-12. 作为后端工程师，我希望 Agent 能根据新 Observation 改变候选排序，从而体现动态诊断而非固定工具流水线。
-13. 作为后端工程师，我希望 Agent 只为 Top-1 生成一个候选补丁，从而控制诊断成本和补丁搜索范围。
+12. 作为后端工程师，我希望 Agent 能根据 Contradicting Evidence 拒绝错误 H1 并 Reformulate，从而体现动态诊断而非固定工具流水线。
+13. 作为后端工程师，我希望 Agent 只为 supported Hypothesis 生成一个候选补丁，从而控制诊断成本和补丁搜索范围。
 14. 作为后端工程师，我希望候选补丁在临时 Docker 工作区中执行注册 Validation，从而避免直接修改真实仓库。
 15. 作为后端工程师，我希望无论 Validation 通过或失败都生成 Root Cause Report，从而保留完整诊断结果。
 16. 作为后端工程师，我希望证据不足或预算耗尽时系统明确停止并说明原因，从而不强行生成确定结论。
@@ -55,7 +55,7 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 23. 作为技术评审者，我希望看到不同冻结任务产生不同必要工具路径，从而验证诊断轨迹不是完全硬编码。
 24. 作为技术评审者，我希望每个工具共享 Tool Spec 契约，从而检查 Schema、权限、超时、错误和审计设计。
 25. 作为技术评审者，我希望模型只负责提出决策而程序维护不变量，从而理解系统如何约束外部模型。
-26. 作为技术评审者，我希望查看每一步重新组装的有界状态快照，从而评估 Context Engineering 是否避免无限历史追加。
+26. 作为技术评审者，我希望查看按 Decision 重建的 Working Context，从而评估系统是否选择相关状态而不是无限追加完整历史。
 27. 作为技术评审者，我希望 `search_code` 返回 AST 符号元数据和排序结果，从而检查代码 RAG 如何支持 Root Cause 定位。
 28. 作为技术评审者，我希望检索实现明确采用固定混合管线，从而不会把未经评测的配置选择描述为可量化增益。
 29. 作为技术评审者，我希望看到 Docker 中真实运行的测试与补丁结果，从而确认 Experiment 不只是模拟响应。
@@ -70,10 +70,10 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 35. 作为项目开发者，我希望不同生命周期阶段使用各自的小型 Schema，从而提高模型结构输出的稳定性。
 36. 作为项目开发者，我希望第一次 Schema Failure 后只允许一次明确纠错，从而避免模糊解析和无限重试。
 37. 作为项目开发者，我希望状态机拒绝非法阶段转换，从而保证工具、Evidence 和补丁只在合法阶段出现。
-38. 作为项目开发者，我希望初始 Hypothesis 数量限制为一至三个，从而保持候选竞争有界。
-39. 作为项目开发者，我希望初始候选形成后不动态补充、替换或重新激活，从而控制两周 MVP 的状态复杂度。
-40. 作为项目开发者，我希望程序按固定 Evidence Score 更新候选排序，从而不依赖模型自报置信度。
-41. 作为项目开发者，我希望 Supporting Evidence 加分且 Contradicting Evidence 扣分，从而使排序变化可解释并可测试。
+38. 作为项目开发者，我希望任意时刻最多一个 Active Hypothesis，从而让 Experiment 归属和状态转换明确。
+39. 作为项目开发者，我希望程序按 H1、H2、H3 维护 append-only History，并禁止 H4、覆盖和复活，从而限制搜索范围。
+40. 作为项目开发者，我希望只有当前 H 结束后才能 Reformulate，从而防止模型绕过 falsification 创建并行候选。
+41. 作为项目开发者，我希望 Evidence 只表达 provenance、Observation 引用、方向和解释，从而避免未经校准的数值 Score。
 42. 作为项目开发者，我希望一次 Diagnosis Run 最多调用八次工具，从而保证 Agent 有确定终止上限。
 43. 作为项目开发者，我希望工具结果、模型响应和 Schema 错误保存到运行目录，从而可以调试失败步骤。
 44. 作为项目开发者，我希望五个工具通过统一注册与执行入口，从而避免各自实现不同的权限和错误逻辑。
@@ -95,20 +95,20 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 57. 作为任务维护者，我希望 Agent 输入与 Root Symbol、参考修复和 Evaluation 答案分离，从而避免答案泄漏。
 58. 作为任务维护者，我希望 Task 1 主要需要 diff 和代码阅读，从而验证变更证据路径。
 59. 作为任务维护者，我希望 Task 2 的 Root Symbol 不能从堆栈直接读取，从而验证混合代码检索路径。
-60. 作为任务维护者，我希望 Task 3 存在至少两个合理候选并需要测试 Experiment 排除错误候选，从而验证假设竞争。
+60. 作为任务维护者，我希望 Task 3 的初始 H1 可以被真实测试 Observation 否定，随后 H2 利用新证据命中 Root Cause，从而验证 bounded self-correction。
 61. 作为任务维护者，我希望 Task 3 在核心 Prompt、Schema 和工具策略基本冻结后运行，从而提供有限的未见故障检查。
 62. 作为任务维护者，我希望每个任务标注 Root Symbol、触发条件、故障机制、失败表现和参考修复行为，从而支持确定性 Evaluation 与人工核查。
 
 ### Evaluation 执行者与本地操作者
 
-63. 作为 Evaluation 执行者，我希望精确比较 Top-1 Root Symbol，从而确定性判断根因位置是否命中。
+63. 作为 Evaluation 执行者，我希望精确比较最终 supported Hypothesis 的 Root Symbol，从而确定性判断根因位置是否命中。
 64. 作为 Evaluation 执行者，我希望检查候选补丁是否可应用和注册 Validation 是否通过，从而评价可执行结果。
 65. 作为 Evaluation 执行者，我希望检查 Root Cause Report 的必需字段，从而防止缺失因果解释或 Evidence 引用。
 66. 作为 Evaluation 执行者，我希望检查所有工具调用是否绑定合法 Hypothesis，从而验证核心轨迹不变量。
 67. 作为 Evaluation 执行者，我希望检查 Experiment 是否声明目的和预期 Observation，从而拒绝无目标工具探索。
 68. 作为 Evaluation 执行者，我希望检查 Evidence 是否引用真实 Observation，从而拒绝无来源的模型判断。
 69. 作为 Evaluation 执行者，我希望检查八次工具预算和合法停止原因，从而发现循环或越界行为。
-70. 作为 Evaluation 执行者，我希望检查只有 Top-1 进入补丁 Validation，从而保证缩减后的补丁策略未被破坏。
+70. 作为 Evaluation 执行者，我希望检查只有 supported Hypothesis 进入补丁 Validation，从而保证补丁策略未被破坏。
 71. 作为 Evaluation 执行者，我希望输出三个任务的逐任务结果，从而避免小样本百分比造成误导。
 72. 作为 Evaluation 执行者，我希望由作者人工核查因果机制，从而不引入额外 LLM Judge。
 73. 作为本地操作者，我希望可以显式运行 Model Compatibility Gate 检查当前 Model Configuration，从而在 Diagnosis Run 前发现协议或能力问题，而不把报告作为运行授权。
@@ -123,26 +123,26 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 3. **Task Manifest**：Manifest 必须版本化，并包含任务 ID、仓库标识、基础快照、Faulty Commit、CI 日志、注册测试命令 ID、Docker 镜像、读写范围和工具调用上限。
 4. **输入隔离**：Agent 可见输入不得包含 Root Symbol 标准答案、参考补丁、修复后代码、答案性 commit message 或 Evaluation 结果。
 5. **任务校验**：MVP 校验 Manifest Schema、受支持仓库、commit、日志、注册命令、镜像和路径边界；不负责自动修复未知环境。
-6. **生命周期编排**：使用最小显式状态机管理 Preparing、Forming Hypotheses、Diagnosing、Executing Tool、Updating Evidence、Validating Top-1 和 Finalizing 阶段。
+6. **生命周期编排**：使用最小显式状态机管理 Preparing、Forming Hypothesis、Diagnosing、Executing Tool、Updating Evidence、Validating 和 Finalizing 阶段。
 7. **受约束 ReAct**：Diagnosing、Executing Tool 和 Updating Evidence 构成诊断 ReAct 循环；状态机管理生命周期和不变量，不暴露自由的无限 ReAct。
 8. **阶段 Schema**：形成 Hypothesis、选择 Experiment、更新 Evidence、生成补丁和生成报告分别使用字段较少的结构化 Schema。
 9. **Schema Failure**：结构输出失败时保存原始响应和校验错误，允许一次明确纠错；再次失败产生 Schema Failure，不使用模糊正则恢复。
-10. **候选范围**：模型初始形成一至三个 Hypothesis。初始候选形成后不再动态补充、替换或重新激活。
-11. **Hypothesis 生命周期**：候选状态限定为 proposed、testing、supported、rejected 和 inconclusive；被拒绝候选不再参与工具选择。
-12. **Experiment 契约**：每个工具调用必须包含活跃 Hypothesis ID、目的、预期 Observation、工具名和结构化参数。
+10. **Hypothesis 范围**：程序只允许一个 Active Hypothesis，并按 append-only 顺序分配 H1、H2、H3；不允许 H4、覆盖历史或复活 rejected H。
+11. **Hypothesis 生命周期**：状态限定为 proposed、testing、supported、rejected 和 inconclusive。proposed/testing 是 Active；supported 进入 Validation；只有 rejected/inconclusive 且预算剩余时才能 Reformulate。
+12. **Experiment 契约**：每个工具调用必须包含当前 Active Hypothesis ID、目的、预期 Observation、falsification relevance、工具名和结构化参数。
 13. **Evidence 契约**：Evidence 必须引用输入或真实工具 Observation，并明确为 Supporting、Contradicting 或无信息结果。
-14. **Evidence Score**：程序使用固定整数规则排序候选。来源强度依次为可复现实验、直接代码/堆栈/断言、Git diff 关联和检索相似性；反证使用对应负权重。分数不是概率。
+14. **Hypothesis Assessment**：模型提交引用 Evidence ID 的 continue/falsified/sufficiently-supported/inconclusive Assessment；程序验证归属和前置 Evidence，再映射状态。Evidence 不包含数值 Score 或 Ranking effect。
 15. **工具预算**：一次 Diagnosis Run 最多执行八次工具调用。总运行超时由 CLI 外层统一控制，不实现 Token、费用和多级时间预算。
-16. **停止条件**：Top-1 完成 Validation、工具预算耗尽、所有候选 rejected/inconclusive、二次 Schema Failure 或不可恢复的模型/工具/沙箱错误都会停止运行。
-17. **Top-1 补丁**：只为当前 Top-1 生成一个正式候选补丁。无论 Validation 结果如何，不执行第二轮自动补丁搜索，也不为 Top-2/Top-3 生成补丁。
+16. **停止条件**：supported Hypothesis 完成 Validation、工具预算耗尽、H3 rejected/inconclusive、二次 Schema Failure 或不可恢复的模型/工具/沙箱错误都会停止运行。
+17. **补丁边界**：只为 supported Hypothesis 生成一个正式候选补丁。无论 Validation 结果如何，不执行第二轮自动补丁搜索。
 18. **Tool Spec**：每个工具声明名称、版本、描述、输入输出 Schema、权限类别、超时、结果上限、副作用和结构化错误。
 19. **工具错误**：统一错误至少包括 invalid arguments、permission denied、timeout 和 execution failed；工具默认不自动重试。
 20. **工具审计**：调用事件记录 Hypothesis、目的、预期 Observation、参数摘要、耗时、状态和结果引用，不记录或要求私有思维链。
 21. **冻结工具集**：MVP 只有 `inspect_diff`、`search_code`、`read_code`、`run_tests` 和 `apply_patch` 五个工具，不实现 MCP 或任意 Shell。
 22. **工具合并**：符号信息由 `search_code` 返回的 AST 元数据承载，不实现独立符号分析工具；语法和轻量静态检查并入注册 Validation。
 23. **路径权限**：只读工具只能访问 Manifest 允许的仓库范围；补丁只能修改允许的业务源码，不能修改测试、依赖锁、任务定义或 Evaluation 数据。
-24. **上下文快照**：每次模型请求重新组装 Diagnosis Task 摘要、最多三个 Hypothesis、Evidence 摘要、最近 Observation、剩余预算和少量必要原文。
-25. **上下文外数据**：完整日志、代码、测试输出和模型响应保存到运行目录；MVP 不实现自动摘要、长期记忆、按需 Artifact 召回或历史重放。
+24. **Working Context**：每次 Model Decision 根据 Decision Type，从 Task Context、结构化 Diagnosis State、相关 Evidence、选定历史 Observation 和 Latest Observation 确定性重建 Context。Form H1、Select Experiment、Update Evidence、Assess Hypothesis、Reformulate 和 Validation 使用不同固定视图。
+25. **上下文外数据**：完整日志、代码、Tool Result、测试输出和模型响应保存为 Run Artifact；MVP 不实现自动摘要、语义/长期记忆、按需 Artifact 召回或完整 Conversation History replay。
 26. **ModelProvider**：只实现一个 OpenAI-compatible HTTP ModelProvider。每次进程运行通过 `CODERCA_MODEL_BASE_URL`、`CODERCA_MODEL_ID`、`CODERCA_MODEL_API_KEY` 和 `CODERCA_MODEL_STRUCTURED_OUTPUT_MODE` 配置一个 Chat Completions 端点、模型和显式 Structured Output Mode；可选 `CODERCA_MODEL_REQUEST_EXTENSIONS` 必须是 JSON object，缺失或空值视为 `{}`。请求必须非流式、`temperature=0`；`native_json_schema` 使用 Provider 原生 strict JSON Schema，`json_text` 不发送 `response_format`。Request Extensions 只能在标准 payload 构造后附加，不得覆盖 `model`、`messages`、`stream`、`temperature` 或 `response_format`，也不得按 Endpoint、Model ID 或品牌推断。两种模式都必须直接解析 `message.content` 并通过本地 Pydantic 校验，不做 fence/thinking 清理、子串提取、字段猜测或模糊修复。
 27. **Model Compatibility Gate**：显式命令在当前 Structured Output Mode 下最多执行一次预检和四个相同的一次性能力探针，覆盖阶段 Schema、合法工具参数、Evidence 更新和可应用的小型 Python 补丁，输出记录 mode 的脱敏 Model Compatibility Report。它 fail-fast，是建议性兼容检查，不授权或阻止 Diagnosis Run，也不自动探测或切换 mode。
 28. **计算边界**：诊断模型由云端 API 托管。代码 embedding 在索引阶段预计算，reranker 在本机 CPU 上执行小候选集重排；MVP 不管理诊断模型 GPU、量化或加载。
@@ -152,17 +152,17 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 32. **检索查询**：查询可以使用异常类型、消息、堆栈、失败测试、diff 符号和 Hypothesis 语义描述；动态查询必须关联对应 Hypothesis。
 33. **Docker 边界**：MVP 使用一个预构建 Django 镜像和临时工作区，默认禁网，只执行注册命令，设置统一超时且不挂载 `CODERCA_MODEL_API_KEY`；云端模型请求只由宿主 Agent 进程发起。
 34. **安全声明**：Docker 边界只降低正常测试的意外副作用，不承诺生产级沙箱、恶意代码防御、容器逃逸防护或跨平台一致性。
-35. **Validation 流程**：Top-1 补丁通过路径校验后应用到临时工作区，再运行注册测试与轻量静态检查；结果成为 Evidence 和报告字段。
+35. **Validation 流程**：supported Hypothesis 的补丁通过路径校验后应用到临时工作区，再运行注册测试与轻量静态检查；结果成为 Evidence 和报告字段。
 36. **运行记录**：每个 Diagnosis Run 使用独立目录保存 Manifest 快照、JSONL 事件、JSON 报告、模型响应、工具输出、补丁和 Validation 结果。
 37. **持久化边界**：大文本使用普通文件引用；不实现 SQLite、内容寻址、跨运行去重、数据库迁移、崩溃恢复或回放。
 38. **CLI**：CLI 负责读取 Manifest、启动 Diagnosis Run、显示关键状态与事件、输出最终报告和运行目录；不提供交互式任务创建、后台执行、HTTP API 或并发。
-39. **Root Cause Report**：报告包含 Top-1/Top-3 候选、位置与 Root Symbol、简短机制、Top-1 因果字段、支持/反对 Evidence、修复建议、补丁、Validation 和停止原因。
+39. **Root Cause Report**：报告包含最终 supported Hypothesis、H1～H3 History、位置与 Root Symbol、因果字段、支持/反对 Evidence、修复建议、补丁、Validation 和停止原因。
 40. **冻结任务**：三个任务共享仓库、镜像和索引流程，但分别强制使用 diff/代码、RAG 和测试 Experiment 证据路径。Task 3 在 Prompt、Schema 和工具策略基本冻结后运行。
-41. **Evaluation**：Outcome Evaluation 检查 Root Symbol、补丁可应用性、Validation 和报告契约；Trajectory Evaluation 检查 Hypothesis 绑定、Experiment 目的、Evidence 引用、预算、停止和 Top-1 补丁不变量。
+41. **Evaluation**：Outcome Evaluation 检查最终 Root Symbol、补丁可应用性、Validation 和报告契约；Trajectory Evaluation 检查 single-active、append-only History、Experiment 绑定、Evidence 引用、reject-before-reformulate、H1～H3 Budget、停止和 supported-H patch 不变量。
 42. **结果表达**：Evaluation 输出逐任务结果，不调用 LLM Judge，不与 Baseline 比较，不汇总具有统计或泛化暗示的成功率；因果机制由作者人工核查。
 43. **交付方式**：MVP 通过源码、本地 Python 环境、操作者配置的 OpenAI-compatible 云端模型 API、一个 Docker 镜像和 CLI 交付，不发布 PyPI、Compose 或托管服务。
-44. **第七天降级**：如果第七天仍未完成真实纵向闭环，依次删除 reranker、将任务从三个减少到两个、将报告从 Top-3 减少到 Top-1，同时保留内部多个 Hypothesis。
-45. **不可削减核心**：最小状态机、五工具协议、已配置的真实云端模型、一个 Docker Experiment 和 Top-1 补丁 Validation 不得因进度被替换为模拟实现。
+44. **第七天降级**：如果第七天仍未完成真实纵向闭环，依次删除 reranker、将任务从三个减少到两个，再减少为只保留 Task 1；不得恢复多候选 Ranking 简化实现。
+45. **不可削减核心**：最小状态机、single-active 不变量、五工具协议、已配置的真实云端模型、一个 Docker Experiment 和 supported-Hypothesis 补丁 Validation 不得因进度被替换为模拟实现。
 
 ## Testing Decisions
 
@@ -173,11 +173,11 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 5. **FakeModelProvider 闭环**：至少一个确定性测试使用 FakeModelProvider 驱动 Manifest 读取、Hypothesis、工具调用、Evidence、补丁、Validation、报告和运行事件的完整纵向路径。
 6. **真实模型隔离**：默认 CI 不读取 API Key、不访问网络且不需要 GPU。Model Compatibility Gate 和三个真实模型 Agent Evaluation 任务必须显式运行。
 7. **状态机测试**：验证合法与非法阶段转换、终态不可继续执行、不可恢复错误进入 Finalizing，以及真实工具不会在错误阶段调用。
-8. **Hypothesis 测试**：验证一至三个初始候选、超过三个被拒绝、候选不动态补充或复活，以及 rejected 候选不能再被选择。
-9. **Evidence Score 测试**：验证实验、直接证据、diff 和检索相似性的单调强度关系，Contradicting Evidence 扣分，并验证分数不作为概率输出。
-10. **预算与停止测试**：验证八次工具上限、候选耗尽、Top-1 Validation、Schema Failure 和不可恢复错误均产生合法停止原因。
+8. **Hypothesis 测试**：验证只形成 H1、single-active、reject-before-H2、H1 不可覆盖/复活、H2/H3 顺序、no-H4 和 append-only History。
+9. **Assessment 测试**：验证 Tool Call 只能绑定 Active Hypothesis，falsified 必须引用 Contradicting Evidence，模型不能直接修改状态。
+10. **预算与停止测试**：验证八次工具上限、H3 结束、supported Hypothesis Validation、Schema Failure 和不可恢复错误均产生合法停止原因。
 11. **Schema 测试**：分别覆盖五类阶段 Schema 的合法输出、首次失败后纠错成功、二次失败终止，以及原始响应与校验错误落盘。
-12. **上下文测试**：验证每一步上下文从当前结构化状态重建，完整历史不会无限追加，大日志和测试输出只通过引用进入状态快照。
+12. **上下文测试**：验证 H1、Experiment、Evidence、Reformulation 和 Validation 各自使用确定性 Context View；H2 可见 H1 rejection knowledge，但不包含完整 Conversation History、全部 Model Response 或无限 Raw Tool Result。
 13. **统一工具契约测试**：五个工具执行同一套输入输出 Schema、权限、超时、错误、审计和结果上限测试。
 14. **工具安全测试**：验证路径穿越、仓库外读取、禁止源码修改、测试修改、依赖锁修改、未知测试命令和任意 Shell 均被拒绝。
 15. **工具错误测试**：分别注入非法参数、权限拒绝、超时和执行失败，验证事件与 Diagnosis Run 保留正确分类且默认不重试。
@@ -185,11 +185,11 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 17. **RAG 集成测试**：在冻结代码快照上执行 BM25、向量融合和 CPU reranker，验证结果具有稳定 Schema、可追溯代码位置且不访问修复后代码。
 18. **索引重建测试**：验证快照变化触发整库重建，旧索引不会被错误用于新的 Faulty Commit。
 19. **Docker 集成测试**：验证临时工作区、默认禁网、注册命令、统一超时和 `CODERCA_MODEL_API_KEY` 不挂载；不把未承诺的生产安全能力写成验收条件。
-20. **补丁测试**：验证只允许 Top-1 进入补丁阶段，补丁只能修改允许源码，Validation 后停止且不会启动第二轮补丁搜索。
+20. **补丁测试**：验证只允许 supported Hypothesis 进入补丁阶段，补丁只能修改允许源码，Validation 后停止且不会启动第二轮补丁搜索。
 21. **运行记录测试**：验证 Manifest 快照、JSONL 事件、JSON 报告、模型响应、工具输出、补丁和 Validation 结果均写入独立运行目录。
-22. **Root Cause Report 测试**：验证 Top 候选、Root Symbol、因果字段、Supporting/Contradicting Evidence、修复建议、补丁、Validation 和停止原因的最小合同。
+22. **Root Cause Report 测试**：验证最终 Hypothesis、History、Root Symbol、因果字段、Supporting/Contradicting Evidence、修复建议、补丁、Validation 和停止原因的最小合同。
 23. **Outcome Evaluation 测试**：用人工构造的命中、未命中、补丁失败和报告缺字段样例验证确定性规则，不使用模糊文本相似度替代 Root Symbol。
-24. **Trajectory Evaluation 测试**：用合法轨迹和违反 Hypothesis 绑定、Experiment 目的、Evidence 引用、预算、停止或 Top-1 规则的轨迹验证检测器。
+24. **Trajectory Evaluation 测试**：用合法轨迹和违反 single-active、History 顺序、Hypothesis 绑定、Experiment 目的、Evidence 引用、reject-before-reformulate、预算、停止或 supported-H patch 规则的轨迹验证检测器。
 25. **三个任务验收**：逐任务记录 Root Symbol、补丁、Validation、报告和轨迹结果；不以三个任务计算具有泛化暗示的成功率。
 26. **人工因果核查**：作者对触发条件、故障机制和失败表现逐任务核查并记录差异，不实现自动 Judge 或一致率研究。
 27. **降级验收**：若触发第七天降级，文档、Manifest、Evaluation 期望和报告合同必须同步反映实际范围，不保留虚假能力声明。
@@ -203,8 +203,8 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 - Raw Model Baseline、Fixed Pipeline、大规模 Benchmark 和统计显著性结论；
 - BM25、向量、混合与 reranker 的多配置消融、参数搜索和在线调参；
 - LLM Judge、大规模隐藏集、稳定性重复实验和 Judge 一致率研究；
-- 完整 Hidden Validation、自动语义防投机和 Top-3 补丁逐个验证；
-- 动态增加、替换、恢复或重新激活 Hypothesis；
+- 完整 Hidden Validation、自动语义防投机和多个补丁并行验证；
+- 并行 Active Hypothesis、H4、替换历史或重新激活 rejected Hypothesis；
 - 多轮自动补丁搜索；
 - 独立符号关系工具、完整 Python 调用图和独立静态检查工具；
 - 自动摘要、长期记忆、Artifact 召回和运行回放；
@@ -218,8 +218,8 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 
 ## Further Notes
 
-- 实现、测试、事件和报告必须使用 `CONTEXT.md` 中的 Diagnosis Task、Task Manifest、Diagnosis Run、Root Cause、Root Cause Candidate、Root Symbol、Hypothesis、Evidence、Experiment、Observation、Validation、Outcome Evaluation 和 Trajectory Evaluation 等规范术语。
-- 当前有效 ADR 为显式状态机、结构化 Tool Runtime、固定混合检索管线、按运行目录持久化、使用本地 Schema 校验与显式 Structured Output Mode 的单一 OpenAI-compatible 云端 ModelProvider，以及最小 Docker 执行边界。旧的检索消融、SQLite、模型兜底、原生 strict Schema 通用最低要求和完整容器控制 ADR 已被取代。
+- 实现、测试、事件和报告必须使用 `CONTEXT.md` 中的 Diagnosis Task、Task Manifest、Diagnosis Run、Root Cause、Root Symbol、Hypothesis、Active Hypothesis、Hypothesis History、Evidence、Experiment、Observation、Working Context、Run Artifact、Validation、Outcome Evaluation 和 Trajectory Evaluation 等规范术语。
+- 当前有效 ADR 为单 Active Hypothesis 与按决策重建上下文、结构化 Tool Runtime、固定混合检索管线、按运行目录持久化、使用本地 Schema 校验与显式 Structured Output Mode 的单一 OpenAI-compatible 云端 ModelProvider，以及最小 Docker 执行边界。旧的多候选状态机、检索消融、SQLite、模型兜底、原生 strict Schema 通用最低要求和完整容器控制 ADR 已被取代。
 - Task 1 已冻结为 django-waffle v5.0.0 基础快照及其人工注入 Faulty Commit；Task 2、Task 3、运行时 Model Configuration、embedding 模型、融合权重、reranker、候选数和 Top-K 仍需按后续 Ticket 冻结。具体云端模型由操作者选择，不写死在本 specification 中，且选择不得扩大产品范围。
 - Model Compatibility Gate 是兼容性风险检查，不是 Benchmark 或 Diagnosis Run 授权。若已配置模型在显式 Structured Output Mode 下无法产生通过本地 Schema 校验的阶段对象、工具参数、Evidence 更新和小型补丁，操作者应更换 Model Configuration，而不是增加 Provider 品牌分支或模糊输出修复。
 - MVP 的合理简历表述是“在一个冻结 Django 项目上实现可复用的 Diagnosis Task 工作流，并以三个业务逻辑回归任务验证动态工具选择、Evidence 更新和补丁 Validation”。不得表述为能够泛化诊断任意 Python/Django 项目。

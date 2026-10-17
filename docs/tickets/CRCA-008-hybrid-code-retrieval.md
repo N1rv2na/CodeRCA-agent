@@ -14,7 +14,7 @@ Task 2 的 Root Symbol 不会直接出现在失败堆栈中，因此 Agent 必�
 
 ## Goal
 
-让 Agent 能为活跃 Hypothesis 调用 `search_code`，在 Faulty Commit 快照的固定 AST/BM25/向量混合索引中返回可追溯的 Root Symbol 候选。
+让 Agent 能为当前 Active Hypothesis 调用 `search_code`，在 Faulty Commit 快照的固定 AST/BM25/向量混合索引中返回可追溯的 Root Symbol 检索结果。
 
 ## Scope
 
@@ -36,7 +36,7 @@ Task 2 的 Root Symbol 不会直接出现在失败堆栈中，因此 Agent 必�
 
 ## Technical Approach
 
-索引仅针对 Task Manifest 指定的 Faulty Commit。所有分块以 Root Symbol 为语义锚点，融合规则和 Top-K 固定，Agent 只能提供与 Hypothesis 绑定的动态查询而不能选择检索算法。`search_code` 通过既有 Tool Runtime 执行，并把大块源码留在运行产物中，只把必要片段和元数据送入上下文。
+索引仅针对 Task Manifest 指定的 Faulty Commit。所有分块以 Root Symbol 为语义锚点，融合规则和 Top-K 固定，Agent 只能提供与 Active Hypothesis 绑定的动态查询而不能选择检索算法。`search_code` 通过既有 Tool Runtime 执行，并把大块源码留在 Run Artifact 中，只把必要片段、元数据和引用送入当前 Decision 的 Working Context。检索内部排序不用于 Diagnosis Hypothesis Ranking。
 
 ## Implementation Steps
 
@@ -54,7 +54,7 @@ Task 2 的 Root Symbol 不会直接出现在失败堆栈中，因此 Agent 必�
 - [ ] 超长块分窗后仍能追溯到唯一所属 Root Symbol，并保留配置化重叠。
 - [ ] 索引只包含 Faulty Commit 源码，不包含参考修复或 Evaluation Ground Truth。
 - [ ] `search_code` 同时使用 BM25 与向量召回及固定融合，返回稳定 Schema 和 Top-K。
-- [ ] 每个动态查询关联一个活跃 Hypothesis，并记录查询来源和结果引用。
+- [ ] 每个动态查询关联当前 Active Hypothesis，并记录查询来源和结果引用。
 - [ ] Faulty Commit 变化会拒绝旧索引并触发整库重建。
 - [ ] 运行期 embedding 不依赖云端诊断模型或其计算资源。
 

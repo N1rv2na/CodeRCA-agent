@@ -16,6 +16,7 @@ from coderca.benchmark import (
     materialize_task_1,
     validate_task_1_inputs,
 )
+from coderca.context_builder import resolve_task_context
 from coderca.contracts import EvaluationGroundTruth
 
 TASK_DIRECTORY = Path("benchmarks/django-waffle/task-1")
@@ -87,6 +88,15 @@ def test_task_1_manifest_uses_the_frozen_waffle_snapshot() -> None:
     )
     assert TASK_1_MANIFEST.read_paths == ["waffle/"]
     assert TASK_1_MANIFEST.write_paths == ["waffle/models.py"]
+
+
+def test_task_1_context_resolves_ci_log_content_instead_of_path_string() -> None:
+    task = resolve_task_context(TASK_1_MANIFEST, TASK_DIRECTORY)
+
+    assert "FAIL: test_case_17" in task.ci_failure_excerpt
+    assert "AssertionError: True is not false" in task.ci_failure_excerpt
+    assert task.ci_failure_excerpt != TASK_1_MANIFEST.ci_log
+    assert task.ci_failure_artifact == TASK_1_MANIFEST.ci_log
 
 
 def test_ground_truth_is_a_separate_contract_and_has_one_root_symbol() -> None:

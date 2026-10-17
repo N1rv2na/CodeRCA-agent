@@ -20,7 +20,7 @@ M3 — Retrieval & Generalization Evidence
 
 - 冻结一个 CPU 可运行的 reranker 及其版本。
 - 固定 rerank 输入候选数、批大小和最终 Top-K。
-- 在运行产物中记录融合前后顺序和分数。
+- 在运行产物中记录融合前后顺序和检索相关性分数；该分数不得进入 Evidence 或 Hypothesis Assessment。
 - 保持 `search_code` 对 Agent 暴露的 Tool Spec 不变。
 - 为关闭 reranker 的降级配置保留相同结果 Schema。
 
@@ -66,7 +66,7 @@ M3 — Retrieval & Generalization Evidence
 
 - CPU 延迟超过五分钟单任务预算；限制候选集并在 Day-7 降级时删除该阶段。
 - 本地依赖安装复杂；选择与 Python 环境兼容且可固定版本的轻量实现。
-- 排序分数被误当概率；仅作为检索内部排序信号。
+- 排序分数被误当 Evidence Score；明确它只属于检索内部排序，不参与 Diagnosis Hypothesis Ranking。
 
 ## Estimated Effort
 

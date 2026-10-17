@@ -426,21 +426,20 @@ class FakeModelProvider:
     ) -> None:
         if structured_responses is None:
             structured_responses = {
-                "form_hypotheses": {
-                    "hypotheses": [
-                        {
-                            "root_symbol": None,
-                            "location_description": (
-                                "Inspect the failing test and changed code."
-                            ),
-                            "mechanism": (
-                                "A changed branch mishandles the CI failure input."
-                            ),
-                            "falsification_criterion": (
-                                "The changed branch preserves the failing input."
-                            ),
-                        }
-                    ]
+                "form_hypothesis": {
+                    "hypothesis": {
+                        "root_symbol": None,
+                        "location_description": (
+                            "Inspect the failing test and changed code."
+                        ),
+                        "mechanism": (
+                            "A changed branch mishandles the CI failure input."
+                        ),
+                        "falsification_criterion": (
+                            "The changed branch preserves the failing input."
+                        ),
+                        "evidence_basis": [],
+                    }
                 }
             }
         self.structured_responses = dict(structured_responses)

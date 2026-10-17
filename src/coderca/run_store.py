@@ -55,7 +55,7 @@ class RunStore:
         artifacts.model_responses_directory.mkdir(parents=True, exist_ok=True)
         path = (
             artifacts.model_responses_directory
-            / f"form-hypotheses-attempt-{attempt}.json"
+            / f"form-hypothesis-attempt-{attempt}.json"
         )
         self._write_json(path, response.value)
         return str(path.relative_to(artifacts.run_directory))

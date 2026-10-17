@@ -1,4 +1,4 @@
-# CRCA-004 — 形成受约束的初始诊断假设
+# CRCA-004 — 形成单个初始 Active Hypothesis
 
 ## Priority
 
@@ -10,56 +10,61 @@ M1 — Evidence-Driven Diagnosis
 
 ## Background
 
-CodeRCA 的核心招聘信号不是自由对话式 ReAct，而是由程序维护生命周期和不变量、模型负责有限诊断决策。第一个可验证能力是从 Diagnosis Task 形成一至三个可证伪 Hypothesis。
+CodeRCA 的核心招聘信号不是自由对话式 ReAct，而是由程序维护生命周期和不变量、模型负责有限诊断决策。初始阶段只有 Task 与 CI Failure，过早形成并冻结多个候选会把弱猜测固化为搜索空间。
 
 ## Goal
 
-让 Diagnosis Run 经过合法生命周期形成有界、结构化且可追踪的初始 Hypothesis 集合，并对模型结构失败采取确定的终止策略。
+让 Diagnosis Run 经过合法生命周期只形成 H1，并建立 single-active、append-only H1～H3 History、受限 Schema correction 与 decision-specific reconstructed context 的基础。
 
 ## Scope
 
-- 实现 Preparing、Forming Hypotheses、Diagnosing 和失败时 Finalizing 的最小状态路径。
-- 定义 Hypothesis 形成阶段的小型 Schema。
-- 限制初始 Hypothesis 数量为一至三个，并固定初始顺序。
-- 初始形成后禁止增加、替换、复活或重新激活候选。
-- 每次模型调用从当前 Diagnosis Task 和结构化状态重新组装有界上下文。
+- 实现 Preparing、Forming Hypothesis、Diagnosing 和失败时 Finalizing 的最小状态路径。
+- 定义只返回一个 Proposal 的 `FormHypothesisDecision`，ID 由程序分配。
+- 首次只形成 H1；同一时刻最多一个 Active Hypothesis。
+- 建立 H1～H3 append-only History、rejected no-revival、no-H4 和 Reformulation 前置约束。
+- 建立 H1、Experiment、Evidence、Hypothesis Assessment、Reformulation 和 Validation 的确定性 Context View 基础。
+- 从 Task Manifest 安全解析 CI artifact，并只把 bounded excerpt 放入 Working Context。
 - Schema 首次失败允许一次明确纠错，第二次失败产生 Schema Failure。
 
 ## Out of Scope
 
-- 工具执行、Evidence Score、补丁和 Validation。
-- 候选动态扩充、恢复运行或多级预算。
-- Prompt 逐字冻结或公开模型私有思维链。
+- 真实 Tool Runtime、Tool 执行和 model-driven diagnosis loop。
+- Evidence Interpretation、Hypothesis Assessment 和 H2/H3 的应用层自动 Reformulation。
+- 补丁、Validation、RAG 和 Evaluation Harness。
 
 ## Technical Approach
 
-使用轻量显式状态机控制生命周期，把诊断循环的自由度限制在阶段 Schema 内。Hypothesis 至少包含稳定 ID、候选 Root Symbol 或待定位描述、可证伪机制和状态。模型只提出候选；程序校验数量、状态和转移。上下文由当前状态快照重建，不追加完整消息历史。
+使用轻量显式状态机控制生命周期。Hypothesis 包含程序分配的稳定 ID、位置、机制、falsification criterion、可选 Evidence basis 和状态。状态机维护 append-only History 与预算；模型不能生成 ID、覆盖历史或写状态。`ContextBuilder` 根据 Decision Type 从结构化状态投影 Working Context，Raw Model Response 与 Tool Result 只保存在 Run Artifact 中。
 
 ## Implementation Steps
 
-1. 定义生命周期阶段、合法转移和终态规则。
-2. 定义 Hypothesis 与形成阶段输出 Schema。
-3. 实现有界上下文组装和模型调用适配。
-4. 实现一次 Schema 纠错与 Schema Failure 终止路径。
-5. 将阶段、模型响应引用和校验错误写入 Diagnosis Run 事件。
-6. 用 FakeModelProvider 和真实兼容模型验证形成路径。
+1. 将复数形成合同改为单个 Proposal，并由程序分配 H1。
+2. 实现 single-active、H1～H3 History、no revival/no H4 与形成前置条件。
+3. 实现确定性的 decision-specific ContextBuilder 基础。
+4. 安全解析 Manifest 相对 CI artifact，拒绝目录逃逸并限制片段长度。
+5. 保留一次 Schema correction 与 Schema Failure 路径。
+6. 更新 CLI、事件、报告和模型响应 Artifact 的 singular 语义。
 
 ## Acceptance Criteria
 
-- [ ] 合法运行只形成一至三个带稳定 ID 的初始 Hypothesis。
-- [ ] 超过三个、零个或字段非法的候选触发一次纠错；再次非法产生 Schema Failure。
-- [ ] 初始集合形成后，程序拒绝新增、替换、复活或重新激活 Hypothesis。
-- [ ] 非法阶段转换被拒绝，终态不能继续执行诊断动作。
-- [ ] 每次模型请求由当前结构化状态重建，完整历史和大日志不被无限追加。
-- [ ] CLI 和事件流可观察当前阶段、Hypothesis 摘要和失败分类。
+- [x] 合法初始运行只形成一个 H1，ID 由程序分配。
+- [x] 有 Active Hypothesis 时不能形成下一个；H1 ended 后才能形成 H2。
+- [x] History 只允许 H1、H2、H3 顺序追加，不允许 H4、覆盖或复活 rejected H。
+- [x] H2/H3 Proposal 必须携带推动 Reformulation 的 Evidence basis。
+- [x] Context View 按 Decision 选择相关状态，不包含完整 Conversation History 或全部 Model Response。
+- [x] 大 Observation 只以 bounded excerpt 与 Artifact ref 进入 Context。
+- [x] CI artifact 从 Task 目录内安全解析，路径逃逸被拒绝。
+- [x] 首次结构失败允许一次纠错；再次失败产生 Schema Failure。
+- [x] CLI 和事件流可观察 H1、当前阶段和失败分类。
 
 ## Testing Strategy
 
-- 用表驱动测试覆盖全部合法和非法阶段转移。
-- 用 FakeModelProvider 覆盖一个、三个、零个、四个候选以及一次纠错成功和二次失败。
-- 验证同一 Hypothesis ID、初始顺序和不可复活不变量。
-- 用超长日志 fixture 验证上下文只包含摘要或引用。
-- 显式运行真实模型形成测试，不纳入默认 CI。
+- 表驱动验证合法和非法生命周期转换。
+- 验证 single-active、reject-before-H2、rejected no-revival、H2/H3 顺序和 no-H4。
+- 分别验证 H1、Experiment、Evidence、Hypothesis Assessment、Reformulation 和 Validation Context View。
+- 验证 Context 不回放完整历史，并对大 Observation 使用 bounded excerpt。
+- 验证 CI artifact 内容而非路径字符串进入 H1 Context。
+- 用 FakeModelProvider 覆盖首次成功、一次纠错成功和二次失败。
 
 ## Dependencies
 
@@ -68,9 +73,8 @@ CodeRCA 的核心招聘信号不是自由对话式 ReAct，而是由程序维护
 
 ## Risks
 
-- 状态机过度抽象导致工期失控；只实现 Spec 已列阶段和当前转移。
-- 已配置模型在单个大 Schema 上可能不稳定；保持阶段 Schema 小而独立。
-- 测试绑定 Prompt 文本；测试只断言公开 Schema 和领域不变量。
+- ContextBuilder 过早发展为通用 Memory Framework；本 Ticket 只允许固定 Decision View 与确定性选择规则。
+- 为证明未来 Loop 而提前实现 Tool Runtime；本 Ticket 只冻结合同和状态不变量。
 
 ## Estimated Effort
 
@@ -79,11 +83,11 @@ CodeRCA 的核心招聘信号不是自由对话式 ReAct，而是由程序维护
 ## Related Spec Sections
 
 - User Stories 5–7, 16–17, 21–22, 25–26, 35–39, 53–54
-- Implementation Decisions 6–10, 24–25
-- Testing Decisions 1, 7–8, 11–12
+- Implementation Decisions 6–14, 24–25
+- Testing Decisions 1, 7–12
 
 ## Related ADRs
 
-- ADR-0001 — 使用自研显式诊断状态机
+- ADR-0014 — 单 Active Hypothesis 与按决策重建上下文
 - ADR-0008 — 两周 MVP 按 Diagnosis Run 目录保存记录
 - ADR-0013 — 本地 Schema 校验与显式 Structured Output Mode

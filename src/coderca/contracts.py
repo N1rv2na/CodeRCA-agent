@@ -21,13 +21,17 @@ DiagnosisEventFailureCategory = (
 HypothesisStatus = Literal[
     "proposed", "testing", "supported", "rejected", "inconclusive"
 ]
+EvidenceDirection = Literal["supporting", "contradicting", "inconclusive"]
+HypothesisAssessmentOutcome = Literal[
+    "continue_testing", "falsified", "sufficiently_supported", "inconclusive"
+]
 
 
 class DiagnosisStage(str, Enum):
     """Program-owned lifecycle stage for one Diagnosis Run."""
 
     PREPARING = "preparing"
-    FORMING_HYPOTHESES = "forming_hypotheses"
+    FORMING_HYPOTHESIS = "forming_hypothesis"
     DIAGNOSING = "diagnosing"
     FINALIZING = "finalizing"
 
@@ -74,6 +78,7 @@ class HypothesisProposal(ContractModel):
     location_description: NonEmptyString | None = None
     mechanism: NonEmptyString
     falsification_criterion: NonEmptyString
+    evidence_basis: tuple[NonEmptyString, ...] = ()
 
     @model_validator(mode="after")
     def require_location(self) -> HypothesisProposal:
@@ -84,19 +89,68 @@ class HypothesisProposal(ContractModel):
         return self
 
 
-class FormHypothesesDecision(ContractModel):
-    """The bounded structured decision for initial Hypothesis formation."""
+class FormHypothesisDecision(ContractModel):
+    """One structured proposal; the program assigns its stable identity."""
 
-    hypotheses: list[HypothesisProposal] = Field(min_length=1, max_length=3)
+    hypothesis: HypothesisProposal
 
 
 class Hypothesis(HypothesisProposal):
-    """One program-identified initial Hypothesis in fixed formation order."""
+    """One immutable, program-identified entry in Hypothesis History."""
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
 
     hypothesis_id: NonEmptyString
     status: HypothesisStatus = "proposed"
+
+
+class Experiment(ContractModel):
+    """A falsification-oriented action bound to the Active Hypothesis."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+
+    experiment_id: NonEmptyString
+    hypothesis_id: NonEmptyString
+    purpose: NonEmptyString
+    expected_observation: NonEmptyString
+    falsification_relevance: NonEmptyString
+    tool_name: NonEmptyString
+    arguments: dict[str, Any]
+
+
+class Observation(ContractModel):
+    """A structured, artifact-backed result produced by an Experiment."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+
+    observation_id: NonEmptyString
+    experiment_id: NonEmptyString
+    hypothesis_id: NonEmptyString
+    source: NonEmptyString
+    summary: NonEmptyString
+    artifact_ref: NonEmptyString
+    excerpt: str = ""
+
+
+class Evidence(ContractModel):
+    """A qualitative interpretation of one Observation for one Hypothesis."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+
+    evidence_id: NonEmptyString
+    hypothesis_id: NonEmptyString
+    observation_ref: NonEmptyString
+    provenance: NonEmptyString
+    direction: EvidenceDirection
+    explanation: NonEmptyString
+
+
+class HypothesisAssessmentDecision(ContractModel):
+    """A model proposal that the program maps to a legal lifecycle transition."""
+
+    outcome: HypothesisAssessmentOutcome
+    evidence_refs: tuple[NonEmptyString, ...] = Field(min_length=1)
+    rationale: NonEmptyString
 
 
 class DiagnosisEvent(ContractModel):
@@ -106,7 +160,7 @@ class DiagnosisEvent(ContractModel):
     task_id: NonEmptyString
     stage: DiagnosisStage
     message: NonEmptyString
-    hypotheses: list[Hypothesis] = Field(default_factory=list)
+    hypothesis_history: list[Hypothesis] = Field(default_factory=list)
     model_response_artifact: NonEmptyString | None = None
     failure_category: DiagnosisEventFailureCategory | None = None
     validation_errors: list[dict[str, Any]] = Field(default_factory=list)
@@ -119,7 +173,7 @@ class DiagnosisReport(ContractModel):
     status: Literal["in_progress", "failed"]
     stop_reason: DiagnosisFailureCategory | None = None
     summary: NonEmptyString
-    hypotheses: list[Hypothesis] = Field(default_factory=list)
+    hypothesis_history: list[Hypothesis] = Field(default_factory=list)
 
 
 class RunArtifacts(ContractModel):
@@ -137,7 +191,7 @@ class DiagnosisRunResult(ContractModel):
     status: Literal["in_progress", "failed"]
     stop_reason: DiagnosisFailureCategory | None = None
     summary: NonEmptyString
-    hypotheses: tuple[Hypothesis, ...] = ()
+    hypothesis_history: tuple[Hypothesis, ...] = ()
     run_directory: Path
     manifest_path: Path
     events_path: Path

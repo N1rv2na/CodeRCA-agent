@@ -2,7 +2,7 @@
 
 | ADR | 状态 | 决策 |
 |---|---|---|
-| [0001](0001-explicit-diagnosis-state-machine.md) | Accepted | 使用自研显式诊断状态机 |
+| [0001](0001-explicit-diagnosis-state-machine.md) | Superseded by 0014 | 使用自研显式诊断状态机与多候选模型 |
 | [0002](0002-typed-tool-runtime.md) | Accepted | 使用结构化工具运行时，不实现 MCP |
 | [0003](0003-retrieval-ablation-boundary.md) | Superseded by 0007 | 统一检索接口并隔离检索消融 |
 | [0004](0004-container-sandbox-boundary.md) | Superseded by 0010 | 采用有限威胁模型的容器沙箱 |
@@ -15,5 +15,6 @@
 | [0011](0011-single-gemini-cloud-model-provider.md) | Superseded by 0012 | 只连接 Gemini 云端模型 API |
 | [0012](0012-configurable-openai-compatible-cloud-provider.md) | Superseded by 0013 | 使用单个可配置的 OpenAI-compatible 云端模型 |
 | [0013](0013-local-schema-validation-structured-output-modes.md) | Accepted | 本地 Schema 校验与显式结构化输出模式 |
+| [0014](0014-single-active-hypothesis-reconstructed-context.md) | Accepted | 单 Active Hypothesis、受限 Reformulation 与按决策重建上下文 |
 
 ADR 被接受后不直接改写历史结论。若决策改变，应新增 ADR 并标记被替代关系。

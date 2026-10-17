@@ -14,7 +14,7 @@ M3 — Retrieval & Generalization Evidence
 
 ## Goal
 
-新增一个冻结业务逻辑回归任务，并用已配置的 OpenAI-compatible 云端模型证明 Agent 能通过与 Hypothesis 绑定的混合检索定位 Root Symbol、生成 Top-1 补丁并完成 Validation。
+新增一个冻结业务逻辑回归任务，并用已配置的 OpenAI-compatible 云端模型证明 Agent 能通过与 Active Hypothesis 绑定的混合检索定位 Root Symbol、支持该 Hypothesis、生成一个补丁并完成 Validation。
 
 ## Scope
 
@@ -29,11 +29,11 @@ M3 — Retrieval & Generalization Evidence
 
 - 第二个仓库、任意新 Django 项目或统计性泛化声明。
 - 检索消融和组件效果归因。
-- Task 3 的多候选 Experiment 路径。
+- Task 3 的 bounded self-correction 路径。
 
 ## Technical Approach
 
-Task 2 复用已经冻结的仓库、镜像、索引流程、Prompt、Schema 和五工具协议，只替换 Task Manifest 所描述的 Faulty Commit、CI 日志与注册测试。验收不只检查最终 Root Symbol，还检查运行轨迹中存在对正确 Hypothesis 有贡献的 `search_code` Observation 和可追溯元数据。
+Task 2 复用已经冻结的仓库、镜像、索引流程、Prompt、Schema 和五工具协议，只替换 Task Manifest 所描述的 Faulty Commit、CI 日志与注册测试。验收不只检查最终 Root Symbol，还检查运行轨迹中存在对最终 supported Hypothesis 有贡献的 `search_code` Observation 和可追溯元数据。
 
 ## Implementation Steps
 
@@ -50,8 +50,8 @@ Task 2 复用已经冻结的仓库、镜像、索引流程、Prompt、Schema 和
 - [ ] Root Symbol 的规范名称和所在代码不直接出现在 CI 堆栈或失败断言中。
 - [ ] Agent 可见输入与 Root Symbol、参考补丁和 Evaluation 答案隔离。
 - [ ] 完整运行至少包含一次绑定活跃 Hypothesis 的 `search_code` 调用。
-- [ ] 支持 Top-1 的 Evidence 引用检索命中的正确 Root Symbol 元数据，而不是仅引用失败表象。
-- [ ] 已配置的真实云端模型运行输出正确 Top-1 Root Symbol、可应用补丁和一次 Validation 结果。
+- [ ] 支持最终 Hypothesis 的 Evidence 引用检索命中的正确 Root Symbol 元数据，而不是仅引用失败表象。
+- [ ] 已配置的真实云端模型运行输出正确最终 Root Symbol、可应用补丁和一次 Validation 结果。
 - [ ] 未启用 reranker 的降级运行仍使用相同 Manifest、Agent 工作流和工具合同。
 
 ## Testing Strategy
@@ -66,13 +66,13 @@ Task 2 复用已经冻结的仓库、镜像、索引流程、Prompt、Schema 和
 
 完整目标：
 
-- CRCA-007 — 完成一次 Top-1 补丁 Validation 闭环
+- CRCA-007 — 完成 Supported Hypothesis 补丁 Validation 闭环
 - CRCA-008 — 实现固定的混合代码检索流水线
 - CRCA-009 — 增加固定 CPU Reranker
 
 Day-7 降级路径：
 
-- CRCA-007 — 完成一次 Top-1 补丁 Validation 闭环
+- CRCA-007 — 完成 Supported Hypothesis 补丁 Validation 闭环
 - CRCA-008 — 实现固定的混合代码检索流水线
 
 ## Risks

@@ -1,6 +1,6 @@
 # CodeRCA
 
-CodeRCA 是一个面向单仓库 CI 测试失败的根因分析 Agent 原型。它围绕 **Hypothesis → Evidence → Experiment** 循环，自主检查代码变更、检索相关实现、运行诊断实验，并在隔离环境中验证 Top-1 候选补丁。
+CodeRCA 是一个面向单仓库 CI 测试失败的根因分析 Agent 原型。它在任意时刻只维护一个 Active Hypothesis，通过真实 Experiment、Observation 和 Evidence 主动尝试证伪；当前假设结束后，最多基于累积诊断知识形成 H2/H3。
 
 项目用于展示 AI Agent 开发中的工作流编排、工具系统、上下文工程、代码 RAG、受控执行和工程 Evaluation，而不是构建生产级故障平台或研究级 Benchmark。
 
@@ -9,22 +9,25 @@ CodeRCA 是一个面向单仓库 CI 测试失败的根因分析 Agent 原型。�
 ```mermaid
 flowchart LR
     Task[Task Manifest] --> State[显式生命周期状态机]
-    State --> Loop[受约束 ReAct 诊断循环]
-    Loop --> Tools[结构化诊断工具]
-    Tools --> Evidence[Supporting / Contradicting Evidence]
-    Evidence --> Rank[Root Cause Candidate 排序]
-    Rank --> Patch[Top-1 候选补丁]
+    State --> H[Single Active Hypothesis]
+    H --> Experiment[Falsifying Experiment]
+    Experiment --> Tools[结构化诊断工具]
+    Tools --> Observation[Observation]
+    Observation --> Evidence[Supporting / Contradicting Evidence]
+    Evidence --> Evaluate[Continue / Reject / Support]
+    Evaluate -->|Rejected, budget remains| H
+    Evaluate --> Patch[Supported Hypothesis Patch]
     Patch --> Validation[Docker Validation]
     Validation --> Report[Root Cause Report + Evaluation]
 ```
 
-Agent 初始形成最多三个可证伪 Hypothesis。每次工具调用必须关联一个活跃 Hypothesis、调用目的和预期 Observation；程序负责 Schema、状态转移、权限、超时、Evidence Score、工具预算和停止条件。
+Agent 首先只形成 H1。每次工具调用必须关联当前 Active Hypothesis、调用目的、预期 Observation 和证伪关联；程序负责稳定 ID、状态转移、Hypothesis/Tool Budget、权限、超时和停止条件。Evidence 没有数值分数，也不用于候选排名。
 
 ## 技术亮点
 
 - **Agent 工作流**：最小显式状态机控制生命周期，在诊断循环内部使用受约束 ReAct；
 - **Tool Runtime**：统一 Tool Spec 管理输入输出 Schema、权限、超时、错误和审计，MVP 固定五个诊断工具；
-- **Context Engineering**：每一步从结构化 Agent 状态重新组装有界上下文，不无限追加完整历史；
+- **Context Engineering**：根据当前 Decision，从结构化 Diagnosis State、相关 Evidence、选定历史 Observation 和最新 Observation 重建 Working Context，不重放完整 Conversation History；
 - **代码 RAG**：Python AST 语义分块，结合 BM25、向量召回、固定融合和 CPU reranker；
 - **实验与评测**：在最小 Docker 执行边界中运行测试和补丁，通过 Outcome Evaluation 与 Trajectory Evaluation 检查结果和 Agent 行为。
 
@@ -64,7 +67,7 @@ python -m venv .venv
 .venv/bin/coderca MANIFEST.json --runs-dir .coderca-runs
 ```
 
-命令会形成一至三个带稳定 ID 的初始 Hypothesis，并输出停在 `diagnosing/in_progress` 的结构化状态摘要。每个 Diagnosis Run 目录包含 `manifest.json`、`events.jsonl`、`report.json` 和脱敏模型响应 Artifact。当前 CLI 默认使用确定性的 `FakeModelProvider`，不会调用真实云端模型 API，也不会执行仓库工具或补丁验证。
+命令会形成一个由程序分配稳定 ID 的初始 H1，并输出停在 `diagnosing/in_progress` 的结构化状态摘要。CI 日志由 Task Manifest 相对路径安全解析，Working Context 只接收有界片段。每个 Diagnosis Run 目录包含 `manifest.json`、`events.jsonl`、`report.json` 和脱敏模型响应 Artifact。当前 CLI 默认使用确定性的 `FakeModelProvider`，不会调用真实云端模型 API，也不会执行仓库工具或补丁验证。
 
 在 CRCA-003 的 Model Compatibility Gate 已通过后，可显式运行真实模型的 Hypothesis 形成验收；默认命令和自动化测试仍不读取 API Key 或访问网络：
 

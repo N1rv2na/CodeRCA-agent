@@ -19,8 +19,8 @@ M4 — Evaluation & Delivery
 ## Scope
 
 - 建立调用 Diagnosis Application Service 的 Evaluation Harness。
-- 实现确定性的 Outcome Evaluation：Top-1 Root Symbol、补丁可应用性、Validation 和报告合同。
-- 实现确定性的 Trajectory Evaluation：Hypothesis 绑定、Experiment 目的与预期、Evidence 引用、工具预算、停止原因和 Top-1 补丁规则。
+- 实现确定性的 Outcome Evaluation：最终 supported Hypothesis 的 Root Symbol、补丁可应用性、Validation 和报告合同。
+- 实现确定性的 Trajectory Evaluation：single-active、append-only History、Experiment 目的/预期/falsification relevance、Evidence 引用、reject-before-reformulate、H1～H3 Budget、停止原因和 supported-H patch 规则。
 - 输出逐任务结果，不汇总带泛化暗示的成功率。
 - 提供触发条件、缺陷位置、传播路径和失败表现的人工核查表。
 - 文档化本地环境、模型 preflight、索引、诊断、评测和产物检查流程。
@@ -50,8 +50,8 @@ Evaluation Harness 作为应用服务适配器读取 Ground Truth 和 Diagnosis 
 ## Acceptance Criteria
 
 - [ ] CLI 与 Evaluation Harness 调用同一个 Diagnosis Application Service。
-- [ ] Outcome Evaluation 分别报告 Top-1 Root Symbol、补丁可应用性、Validation 和报告合同结果。
-- [ ] Trajectory Evaluation 能检测未绑定 Hypothesis、无目的或预期的 Experiment、无 Observation 来源的 Evidence、预算越界、非法停止和非 Top-1 补丁。
+- [ ] Outcome Evaluation 分别报告最终 Root Symbol、补丁可应用性、Validation 和报告合同结果。
+- [ ] Trajectory Evaluation 能检测并行 Active H、History 覆盖/复活/H4、未绑定 Experiment、缺少 falsification relevance、无 Observation 来源的 Evidence、未结束当前 H 就 Reformulate、预算越界、非法停止和非 supported-H patch。
 - [ ] 合法与故意违规的 Evaluation fixture 均产生预期确定性结果。
 - [ ] 输出按 Task 1、Task 2，以及完整目标中的 Task 3 逐项列出，不计算成功率。
 - [ ] 补丁通过不会覆盖 Root Symbol 未命中或因果核查失败。
@@ -63,7 +63,7 @@ Evaluation Harness 作为应用服务适配器读取 Ground Truth 和 Diagnosis 
 ## Testing Strategy
 
 - 用命中、未命中、补丁失败、Validation 失败和报告缺字段 fixture 测试 Outcome Evaluation。
-- 用合法和逐项违反核心不变量的 JSONL 轨迹测试 Trajectory Evaluation。
+- 用合法和逐项违反 single-active、append-only、reject-before-reformulate、Evidence provenance 与 Budget 不变量的 JSONL 轨迹测试 Trajectory Evaluation。
 - 对 Harness 运行 FakeModelProvider 端到端测试，验证它没有绕过应用服务。
 - 在干净本地检出环境按文档执行一次 smoke acceptance。
 - 将真实任务结果作为显式工程 Evaluation 产物，不纳入默认 CI。
@@ -72,13 +72,13 @@ Evaluation Harness 作为应用服务适配器读取 Ground Truth 和 Diagnosis 
 
 完整目标：
 
-- CRCA-007 — 完成一次 Top-1 补丁 Validation 闭环
+- CRCA-007 — 完成 Supported Hypothesis 补丁 Validation 闭环
 - CRCA-010 — 使用 Task 2 验证 RAG 诊断路径
-- CRCA-011 — 使用 Task 3 验证 Hypothesis 竞争机制
+- CRCA-011 — 使用 Task 3 验证 Bounded Self-Correction
 
 Day-7 降级路径：
 
-- CRCA-007 — 完成一次 Top-1 补丁 Validation 闭环
+- CRCA-007 — 完成 Supported Hypothesis 补丁 Validation 闭环
 - CRCA-010 — 使用 Task 2 验证 RAG 诊断路径
 
 ## Risks
@@ -102,7 +102,7 @@ Day-7 降级路径：
 
 ## Related ADRs
 
-- ADR-0001 — 使用自研显式诊断状态机
+- ADR-0014 — 单 Active Hypothesis 与按决策重建上下文
 - ADR-0002 — 使用结构化工具运行时且不实现 MCP
 - ADR-0007 — 两周 MVP 使用固定混合检索管线
 - ADR-0008 — 两周 MVP 按 Diagnosis Run 目录保存记录

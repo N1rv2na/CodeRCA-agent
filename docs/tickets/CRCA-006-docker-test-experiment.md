@@ -10,7 +10,7 @@ M2 — Experiment & Patch Validation
 
 ## Background
 
-代码阅读证据无法充分区分多个合理 Hypothesis。CodeRCA 需要在受控环境中执行真实测试，把预先声明的预期与实际 Observation 对照，形成强度最高的 Experiment Evidence。
+代码阅读 Evidence 未必足以证伪当前 Active Hypothesis。CodeRCA 需要在受控环境中执行真实测试，把预先声明的预期与实际 Observation 对照，形成可追溯的 Experiment Evidence。
 
 ## Goal
 
@@ -23,17 +23,17 @@ M2 — Experiment & Patch Validation
 - 默认禁网、设置统一超时、不挂载模型凭证。
 - 拒绝未知命令、任意 Shell 和 Manifest 范围外路径。
 - 保存命令、退出状态、截断摘要和完整输出引用。
-- 将测试 Observation 转换成 Supporting 或 Contradicting Experiment Evidence。
+- 将测试 Observation 转换成 Supporting、Contradicting 或 Inconclusive Experiment Evidence，不计算数值 Score。
 
 ## Out of Scope
 
 - 生产级沙箱、恶意代码防御、容器逃逸保证和完整资源限制矩阵。
 - 多镜像、Docker Compose、跨平台一致性或后台任务。
-- 应用补丁和 Top-1 Validation。
+- 应用补丁和 supported Hypothesis Validation。
 
 ## Technical Approach
 
-`run_tests` 接受注册命令 ID 而不是原始 Shell 字符串。宿主为 Faulty Commit 创建隔离工作副本并挂载到单次容器；模型服务和凭据始终留在容器外。Experiment 调用前必须声明目的与预期 Observation，运行结果通过普通文件引用进入有界状态。
+`run_tests` 接受注册命令 ID 而不是原始 Shell 字符串。宿主为 Faulty Commit 创建隔离工作副本并挂载到单次容器；模型服务和凭据始终留在容器外。Experiment 调用前必须声明目的、预期 Observation 和 falsification relevance，运行结果通过 Artifact ref 与 bounded excerpt 进入 decision-specific Working Context。
 
 ## Implementation Steps
 
@@ -52,7 +52,7 @@ M2 — Experiment & Patch Validation
 - [ ] 容器默认无网络，并且不接收模型凭据或模型服务配置。
 - [ ] 超时测试被终止并分类为 timeout，不自动重试。
 - [ ] 完整输出保存到 Diagnosis Run，模型上下文只接收摘要和引用。
-- [ ] 每个测试 Observation 绑定发起 Experiment 与 Hypothesis，并按 `+4/-4` 形成 Evidence。
+- [ ] 每个测试 Observation 绑定发起 Experiment 与当前 Active Hypothesis，并形成有 provenance 的 qualitative Evidence。
 - [ ] 文档和错误信息不将该边界宣传为生产级安全沙箱。
 
 ## Testing Strategy
@@ -85,7 +85,7 @@ M2 — Experiment & Patch Validation
 
 ## Related ADRs
 
-- ADR-0001 — 使用自研显式诊断状态机
+- ADR-0014 — 单 Active Hypothesis 与按决策重建上下文
 - ADR-0002 — 使用结构化工具运行时且不实现 MCP
 - ADR-0010 — 两周 MVP 采用最小 Docker 执行边界
 

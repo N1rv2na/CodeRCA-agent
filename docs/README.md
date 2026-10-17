@@ -14,6 +14,6 @@
 - CRCA-001：Manifest-to-Run walking skeleton；
 - CRCA-002：冻结的 django-waffle Task 1、独立 Evaluation Ground Truth 与基准材料；
 - CRCA-003：通用 OpenAI-compatible ModelProvider、两种 Structured Output Mode、受控 Request Extensions 与 Model Compatibility Gate。
-- CRCA-004：最小显式状态路径、受约束初始 Hypothesis、一次 Schema 纠错、Schema Failure 终止，以及显式选择 OpenAI-compatible Provider 的真实模型形成入口。
+- CRCA-004：单个初始 H1、append-only H1～H3 History 与 single-active 不变量、decision-specific ContextBuilder、一次 Schema 纠错、Schema Failure 终止，以及显式选择 OpenAI-compatible Provider 的真实模型形成入口。
 
 诊断工具循环、Tool Runtime、RAG、Docker Validation 和 Evaluation Harness 仍属于后续 Ticket，不能从当前代码状态推断为已经实现。

@@ -13,11 +13,21 @@ from coderca.model_provider import (
 )
 
 
+def write_manifest_with_ci_log(
+    root: Path, valid_manifest_data: dict[str, object]
+) -> Path:
+    manifest_path = root / "manifest.json"
+    manifest_path.write_text(json.dumps(valid_manifest_data), encoding="utf-8")
+    ci_path = root / str(valid_manifest_data["ci_log"])
+    ci_path.parent.mkdir(parents=True, exist_ok=True)
+    ci_path.write_text("pytest failed: expected 1, got 2\n", encoding="utf-8")
+    return manifest_path
+
+
 def test_cli_success_prints_hypothesis_stage_and_run_directory(
     tmp_path: Path, valid_manifest_data: dict[str, object], capsys: object
 ) -> None:
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps(valid_manifest_data), encoding="utf-8")
+    manifest_path = write_manifest_with_ci_log(tmp_path, valid_manifest_data)
     runs_dir = tmp_path / "runs"
 
     exit_code = main([str(manifest_path), "--runs-dir", str(runs_dir)])
@@ -29,7 +39,8 @@ def test_cli_success_prints_hypothesis_stage_and_run_directory(
     assert summary["stage"] == "diagnosing"
     assert summary["status"] == "in_progress"
     assert summary["stop_reason"] is None
-    assert summary["hypotheses"][0]["hypothesis_id"] == "H1"
+    assert summary["hypothesis_history"][0]["hypothesis_id"] == "H1"
+    assert summary["active_hypothesis"]["hypothesis_id"] == "H1"
     assert summary["run_id"]
     assert summary["task_id"] == "task-001"
     assert Path(summary["run_directory"]).is_dir()
@@ -38,12 +49,11 @@ def test_cli_success_prints_hypothesis_stage_and_run_directory(
 def test_cli_schema_failure_is_observable_and_returns_nonzero(
     tmp_path: Path, valid_manifest_data: dict[str, object], capsys: object
 ) -> None:
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps(valid_manifest_data), encoding="utf-8")
+    manifest_path = write_manifest_with_ci_log(tmp_path, valid_manifest_data)
     runs_dir = tmp_path / "runs"
     provider = FakeModelProvider(
         structured_response_sequences={
-            "form_hypotheses": [{"hypotheses": []}, {"hypotheses": []}]
+            "form_hypothesis": [{"hypothesis": {}}, {"hypothesis": {}}]
         }
     )
 
@@ -58,7 +68,8 @@ def test_cli_schema_failure_is_observable_and_returns_nonzero(
     assert summary["stage"] == "finalizing"
     assert summary["status"] == "failed"
     assert summary["stop_reason"] == "schema_failure"
-    assert summary["hypotheses"] == []
+    assert summary["hypothesis_history"] == []
+    assert summary["active_hypothesis"] is None
     assert Path(summary["run_directory"]).is_dir()
 
 
@@ -85,8 +96,7 @@ def test_cli_invalid_manifest_returns_structured_error_without_run_directory(
 def test_cli_explicit_configured_provider_runs_formation_path_without_network(
     tmp_path: Path, valid_manifest_data: dict[str, object], capsys: object
 ) -> None:
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps(valid_manifest_data), encoding="utf-8")
+    manifest_path = write_manifest_with_ci_log(tmp_path, valid_manifest_data)
     captured_configuration: dict[str, ModelConfiguration | SecretStr] = {}
 
     def provider_factory(
