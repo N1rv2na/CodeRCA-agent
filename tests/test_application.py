@@ -16,7 +16,6 @@ def proposal_payload(symbol: str = "package.module.select_value") -> dict[str, o
         "location_description": None,
         "mechanism": "A truthiness fallback discards explicit zero.",
         "falsification_criterion": "The code distinguishes zero from missing.",
-        "evidence_basis": [],
     }
 
 
@@ -128,6 +127,34 @@ def test_first_invalid_formation_gets_one_fresh_schema_correction(
         "stage_changed",
         "schema_correction_requested",
         "hypothesis_formed",
+    ]
+
+
+def test_h1_free_text_evidence_basis_triggers_bounded_schema_correction(
+    tmp_path: Path, valid_manifest_data: dict[str, object]
+) -> None:
+    invalid_h1 = {
+        "hypothesis": {
+            **proposal_payload(),
+            "evidence_basis": ["The writable path probably contains the defect."],
+        }
+    }
+    provider = FakeModelProvider(
+        structured_response_sequences={
+            "form_hypothesis": [invalid_h1, {"hypothesis": proposal_payload()}]
+        }
+    )
+
+    result = DiagnosisApplicationService(
+        provider=provider, run_store=RunStore(tmp_path / "runs")
+    ).start_diagnosis(resolved_task(valid_manifest_data))
+
+    assert result.status == "in_progress"
+    assert result.hypothesis_history[0].evidence_basis == ()
+    events = [json.loads(line) for line in result.events_path.read_text().splitlines()]
+    assert events[2]["event_type"] == "schema_correction_requested"
+    assert events[2]["validation_errors"] == [
+        {"loc": ["hypothesis", "evidence_basis"], "type": "extra_forbidden"}
     ]
 
 

@@ -36,19 +36,18 @@ def manifest() -> TaskManifest:
     )
 
 
-def proposal(index: int, evidence_basis: tuple[str, ...] = ()) -> HypothesisProposal:
+def proposal(index: int) -> HypothesisProposal:
     return HypothesisProposal(
         location_description=f"module branch {index}",
         mechanism=f"mechanism {index}",
         falsification_criterion=f"criterion {index}",
-        evidence_basis=evidence_basis,
     )
 
 
 def state_with_h1() -> DiagnosisStateMachine:
     state = DiagnosisStateMachine()
     state.begin_hypothesis_formation()
-    state.form_hypothesis(FormHypothesisDecision(hypothesis=proposal(1)))
+    state.form_initial_hypothesis(FormHypothesisDecision(hypothesis=proposal(1)))
     return state
 
 

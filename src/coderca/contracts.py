@@ -78,7 +78,6 @@ class HypothesisProposal(ContractModel):
     location_description: NonEmptyString | None = None
     mechanism: NonEmptyString
     falsification_criterion: NonEmptyString
-    evidence_basis: tuple[NonEmptyString, ...] = ()
 
     @model_validator(mode="after")
     def require_location(self) -> HypothesisProposal:
@@ -90,9 +89,22 @@ class HypothesisProposal(ContractModel):
 
 
 class FormHypothesisDecision(ContractModel):
-    """One structured proposal; the program assigns its stable identity."""
+    """One initial proposal; H1 cannot cite Evidence that does not exist yet."""
 
     hypothesis: HypothesisProposal
+
+
+class ReformulateHypothesisDecision(ContractModel):
+    """One replacement proposal citing existing Evidence by stable ID."""
+
+    hypothesis: HypothesisProposal
+    evidence_refs: tuple[NonEmptyString, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def require_unique_evidence_refs(self) -> ReformulateHypothesisDecision:
+        if len(set(self.evidence_refs)) != len(self.evidence_refs):
+            raise ValueError("Reformulation Evidence IDs must be unique")
+        return self
 
 
 class Hypothesis(HypothesisProposal):
@@ -101,6 +113,7 @@ class Hypothesis(HypothesisProposal):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
 
     hypothesis_id: NonEmptyString
+    evidence_basis: tuple[NonEmptyString, ...] = ()
     status: HypothesisStatus = "proposed"
 
 

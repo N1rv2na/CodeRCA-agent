@@ -25,6 +25,7 @@ M1 — Evidence-Driven Diagnosis
 - 程序验证 Evidence provenance、Observation reference 和 Hypothesis 归属。
 - 根据结构化 Assessment 继续检验、support、reject 或结束为 inconclusive。
 - 当前 H rejected/inconclusive 且预算剩余时，使用相关 Evidence/Observation Context Reformulate H2/H3。
+- 使用 `ReformulateHypothesisDecision` 提交有序、唯一 Evidence ID；程序解析真实 Evidence，并验证其属于已结束的 Hypothesis History。
 - 实现八次 Tool Budget、H3 exhausted 和合法停止原因。
 - 生成不含补丁 Validation 的 Root Cause Report。
 
@@ -36,7 +37,7 @@ M1 — Evidence-Driven Diagnosis
 
 ## Technical Approach
 
-状态机控制 Diagnosing、Executing Tool、Updating Evidence、Forming Hypothesis 和 Finalizing。模型一次只选择一个 falsification-oriented Experiment，并在 Observation 后输出 qualitative Evidence 与 Assessment；程序检查当前 Active Hypothesis、真实 Observation 引用、Evidence 方向、Budget 和状态前置条件。Reformulation Context 包含旧 H 的终态、否定或结束它的 Evidence、相关代码/diff Observation 和剩余预算，不重放完整历史。
+状态机控制 Diagnosing、Executing Tool、Updating Evidence、Forming Hypothesis 和 Finalizing。模型一次只选择一个 falsification-oriented Experiment，并在 Observation 后输出 qualitative Evidence 与 Assessment；程序检查当前 Active Hypothesis、真实 Observation 引用、Evidence 方向、Budget 和状态前置条件。Reformulation 使用与 H1 Formation 分离的 Schema，只提交 Evidence ID；程序拒绝空值、重复、未知 ID 和不属于已结束 History 的引用。Reformulation Context 包含旧 H 的终态、否定或结束它的 Evidence、相关代码/diff Observation 和剩余预算，不重放完整历史。
 
 ## Implementation Steps
 
@@ -45,7 +46,7 @@ M1 — Evidence-Driven Diagnosis
 3. 实现 Select Experiment、Update Evidence 和 Assess Hypothesis Schema。
 4. 实现 Active Hypothesis 绑定、权限、结果上限和审计事件。
 5. 实现 program-owned Assessment 映射和 Evidence 引用检查。
-6. 实现 H2/H3 bounded Reformulation 与 budget-exhausted stop。
+6. 通过独立 `ReformulateHypothesisDecision` 实现 H2/H3 Evidence ID 校验、bounded Reformulation 与 budget-exhausted stop。
 7. 扩展 Root Cause Report，呈现 History、最终 Hypothesis、正反 Evidence 和停止原因。
 8. 用 Task 1 fixture 建立只读诊断纵向测试。
 
@@ -57,6 +58,7 @@ M1 — Evidence-Driven Diagnosis
 - [ ] Observation 与 Evidence 均引用真实 Tool Result；Evidence 不含数值 Score。
 - [ ] falsified Assessment 必须引用当前 H 的 Contradicting Evidence，程序才将其转换为 rejected。
 - [ ] H1 rejected/inconclusive 后可形成 H2；Active H1 存在时不能形成 H2。
+- [ ] H2/H3 Evidence Basis 只保存有序、唯一、真实且属于已结束 Hypothesis History 的 Evidence ID；自由文本或未知 ID 在状态变更前失败。
 - [ ] H2/H3 Context 包含旧 H 的结束 Evidence 与相关 Observation，且新机制不能只是原文重复。
 - [ ] H3 结束或第九次 Tool Call 产生确定性停止，不允许 H4。
 - [ ] Task 1 的只读运行输出最终 Root Symbol、机制、History 和 Evidence refs。
@@ -67,7 +69,7 @@ M1 — Evidence-Driven Diagnosis
 - 对 Tool Runtime 执行参数、权限、超时、错误、截断和审计做合同测试。
 - 对两个只读工具使用冻结仓库 fixture 做集成测试。
 - 用 Supporting、Contradicting 和 Inconclusive Evidence 测试 Assessment 前置条件。
-- 用 FakeModelProvider 执行 H1 continue、H1 reject→H2、H3 exhausted 和 supported 路径。
+- 用 FakeModelProvider 执行 H1 continue、H1 reject→H2、H3 exhausted 和 supported 路径，并注入自由文本、重复、未知和错误归属 Evidence ref。
 - 验证 Reformulation Context 的选定知识与 Raw Artifact 边界。
 
 ## Dependencies

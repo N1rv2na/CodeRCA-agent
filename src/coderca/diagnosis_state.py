@@ -9,7 +9,9 @@ from .contracts import (
     FormHypothesisDecision,
     Hypothesis,
     HypothesisAssessmentDecision,
+    HypothesisProposal,
     HypothesisStatus,
+    ReformulateHypothesisDecision,
 )
 
 _MAX_HYPOTHESES = 3
@@ -131,7 +133,56 @@ class DiagnosisStateMachine:
             )
         self._schema_corrections_used += 1
 
-    def form_hypothesis(self, decision: FormHypothesisDecision) -> Hypothesis:
+    def form_initial_hypothesis(
+        self, decision: FormHypothesisDecision
+    ) -> Hypothesis:
+        """Append H1 without accepting model-authored Evidence references."""
+
+        self._require_formation_ready()
+        if self._hypothesis_history:
+            raise InvalidDiagnosisTransition(
+                "initial Hypothesis formation requires an empty History"
+            )
+        return self._append_hypothesis(decision.hypothesis, evidence_basis=())
+
+    def reformulate_hypothesis(
+        self,
+        decision: ReformulateHypothesisDecision,
+        *,
+        evidence: list[Evidence],
+    ) -> Hypothesis:
+        """Append H2/H3 after resolving every model-cited Evidence ID."""
+
+        self._require_formation_ready()
+        if not self._hypothesis_history:
+            raise InvalidDiagnosisTransition(
+                "Reformulation requires an ended Hypothesis History"
+            )
+
+        evidence_by_id = {item.evidence_id: item for item in evidence}
+        try:
+            referenced = [evidence_by_id[item] for item in decision.evidence_refs]
+        except KeyError as exc:
+            raise InvalidDiagnosisTransition(
+                "Reformulation references unknown Evidence"
+            ) from exc
+
+        ended_hypothesis_ids = {
+            item.hypothesis_id
+            for item in self._hypothesis_history
+            if item.status in _REFORMULATABLE_STATUSES
+        }
+        if any(
+            item.hypothesis_id not in ended_hypothesis_ids for item in referenced
+        ):
+            raise InvalidDiagnosisTransition(
+                "Reformulation Evidence must belong to ended Hypothesis History"
+            )
+        return self._append_hypothesis(
+            decision.hypothesis, evidence_basis=decision.evidence_refs
+        )
+
+    def _require_formation_ready(self) -> None:
         if self._stage is not DiagnosisStage.FORMING_HYPOTHESIS:
             raise InvalidDiagnosisTransition(
                 "a Hypothesis can only be formed in forming_hypothesis"
@@ -142,19 +193,20 @@ class DiagnosisStateMachine:
             raise InvalidDiagnosisTransition(
                 "Hypothesis budget exhausted; H4 is forbidden"
             )
-        if self._hypothesis_history and not decision.hypothesis.evidence_basis:
-            raise InvalidDiagnosisTransition(
-                "a reformulated Hypothesis requires an evidence basis"
-            )
 
-        proposal = decision.hypothesis
+    def _append_hypothesis(
+        self,
+        proposal: HypothesisProposal,
+        *,
+        evidence_basis: tuple[str, ...],
+    ) -> Hypothesis:
         hypothesis = Hypothesis(
             hypothesis_id=f"H{len(self._hypothesis_history) + 1}",
             root_symbol=proposal.root_symbol,
             location_description=proposal.location_description,
             mechanism=proposal.mechanism,
             falsification_criterion=proposal.falsification_criterion,
-            evidence_basis=proposal.evidence_basis,
+            evidence_basis=evidence_basis,
         )
         self._hypothesis_history = (*self._hypothesis_history, hypothesis)
         self._stage = DiagnosisStage.DIAGNOSING

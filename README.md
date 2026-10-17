@@ -21,7 +21,7 @@ flowchart LR
     Validation --> Report[Root Cause Report + Evaluation]
 ```
 
-Agent 首先只形成 H1。每次工具调用必须关联当前 Active Hypothesis、调用目的、预期 Observation 和证伪关联；程序负责稳定 ID、状态转移、Hypothesis/Tool Budget、权限、超时和停止条件。Evidence 没有数值分数，也不用于候选排名。
+Agent 首先只形成 H1。H1 Schema 不接受 Evidence Basis；H2/H3 只能引用程序已验证、属于已结束 Hypothesis History 的 Evidence ID。每次工具调用必须关联当前 Active Hypothesis、调用目的、预期 Observation 和证伪关联；程序负责稳定 ID、状态转移、Hypothesis/Tool Budget、权限、超时和停止条件。Evidence 没有数值分数，也不用于候选排名。
 
 ## 技术亮点
 

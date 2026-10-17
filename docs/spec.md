@@ -125,9 +125,9 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 5. **任务校验**：MVP 校验 Manifest Schema、受支持仓库、commit、日志、注册命令、镜像和路径边界；不负责自动修复未知环境。
 6. **生命周期编排**：使用最小显式状态机管理 Preparing、Forming Hypothesis、Diagnosing、Executing Tool、Updating Evidence、Validating 和 Finalizing 阶段。
 7. **受约束 ReAct**：Diagnosing、Executing Tool 和 Updating Evidence 构成诊断 ReAct 循环；状态机管理生命周期和不变量，不暴露自由的无限 ReAct。
-8. **阶段 Schema**：形成 Hypothesis、选择 Experiment、更新 Evidence、生成补丁和生成报告分别使用字段较少的结构化 Schema。
+8. **阶段 Schema**：形成初始 H1、Reformulate H2/H3、选择 Experiment、更新 Evidence、评估 Hypothesis、生成补丁和生成报告分别使用字段较少的结构化 Schema。`FormHypothesisDecision` 不含 Evidence Basis；`ReformulateHypothesisDecision` 必须引用至少一个有序、唯一 Evidence ID。
 9. **Schema Failure**：结构输出失败时保存原始响应和校验错误，允许一次明确纠错；再次失败产生 Schema Failure，不使用模糊正则恢复。
-10. **Hypothesis 范围**：程序只允许一个 Active Hypothesis，并按 append-only 顺序分配 H1、H2、H3；不允许 H4、覆盖历史或复活 rejected H。
+10. **Hypothesis 范围**：程序只允许一个 Active Hypothesis，并按 append-only 顺序分配 H1、H2、H3；不允许 H4、覆盖历史或复活 rejected H。H1 的 Evidence Basis 由程序固定为空；H2/H3 只能保存已解析为真实 Evidence、且属于 `rejected`/`inconclusive` History 的 ID。
 11. **Hypothesis 生命周期**：状态限定为 proposed、testing、supported、rejected 和 inconclusive。proposed/testing 是 Active；supported 进入 Validation；只有 rejected/inconclusive 且预算剩余时才能 Reformulate。
 12. **Experiment 契约**：每个工具调用必须包含当前 Active Hypothesis ID、目的、预期 Observation、falsification relevance、工具名和结构化参数。
 13. **Evidence 契约**：Evidence 必须引用输入或真实工具 Observation，并明确为 Supporting、Contradicting 或无信息结果。
@@ -173,7 +173,7 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 5. **FakeModelProvider 闭环**：至少一个确定性测试使用 FakeModelProvider 驱动 Manifest 读取、Hypothesis、工具调用、Evidence、补丁、Validation、报告和运行事件的完整纵向路径。
 6. **真实模型隔离**：默认 CI 不读取 API Key、不访问网络且不需要 GPU。Model Compatibility Gate 和三个真实模型 Agent Evaluation 任务必须显式运行。
 7. **状态机测试**：验证合法与非法阶段转换、终态不可继续执行、不可恢复错误进入 Finalizing，以及真实工具不会在错误阶段调用。
-8. **Hypothesis 测试**：验证只形成 H1、single-active、reject-before-H2、H1 不可覆盖/复活、H2/H3 顺序、no-H4 和 append-only History。
+8. **Hypothesis 测试**：验证只形成 H1、H1 Schema 拒绝自由文本 Evidence Basis、single-active、reject-before-H2、H1 不可覆盖/复活、H2/H3 只引用真实且属于已结束 History 的唯一 Evidence ID、no-H4 和 append-only History。
 9. **Assessment 测试**：验证 Tool Call 只能绑定 Active Hypothesis，falsified 必须引用 Contradicting Evidence，模型不能直接修改状态。
 10. **预算与停止测试**：验证八次工具上限、H3 结束、supported Hypothesis Validation、Schema Failure 和不可恢复错误均产生合法停止原因。
 11. **Schema 测试**：分别覆盖五类阶段 Schema 的合法输出、首次失败后纠错成功、二次失败终止，以及原始响应与校验错误落盘。

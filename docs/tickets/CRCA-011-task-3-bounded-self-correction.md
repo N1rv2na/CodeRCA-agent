@@ -23,7 +23,7 @@ Task 1 和 Task 2 可以证明诊断闭环与 RAG，但未必证明 Agent 能纠
 - 设计一个注册测试 Experiment，其 Observation 能反驳 H1。
 - 冻结 Manifest、Ground Truth 和关键 Trajectory 期望。
 - 使用真实模型执行端到端 Diagnosis Run。
-- 记录 H1 rejection、H2 evidence basis、最终 Hypothesis、补丁和 Validation。
+- 记录 H1 rejection、由真实 Evidence ID 组成的 H2 Evidence Basis、最终 Hypothesis、补丁和 Validation。
 
 ## Out of Scope
 
@@ -33,7 +33,7 @@ Task 1 和 Task 2 可以证明诊断闭环与 RAG，但未必证明 Agent 能纠
 
 ## Technical Approach
 
-Task 3 在核心行为冻结后加入，避免把 Agent 针对任务手工调成固定流水线。Ground Truth 不要求私有思维链，而是定义可观察 Trajectory：H1、声明 falsification relevance 的测试 Experiment、真实 Observation、针对 H1 的 Contradicting Evidence、H1 rejected、带 Evidence basis 的 H2，以及最终 supported Hypothesis。H2 Context 必须来自结构化 State 与选定 Observation，不重放完整 Conversation History。
+Task 3 在核心行为冻结后加入，避免把 Agent 针对任务手工调成固定流水线。Ground Truth 不要求私有思维链，而是定义可观察 Trajectory：空 Evidence Basis 的 H1、声明 falsification relevance 的测试 Experiment、真实 Observation、针对 H1 的 Contradicting Evidence、H1 rejected、通过独立 Reformulation 合同引用该 Evidence ID 的 H2，以及最终 supported Hypothesis。H2 Context 必须来自结构化 State 与选定 Observation，不重放完整 Conversation History。
 
 ## Implementation Steps
 
@@ -51,14 +51,14 @@ Task 3 在核心行为冻结后加入，避免把 Agent 针对任务手工调成
 - [ ] `run_tests` Experiment 绑定 H1，并预先声明目的、预期 Observation 和 falsification relevance。
 - [ ] 实际 Observation 产生引用真实 Artifact 的 Contradicting Evidence。
 - [ ] 程序先把 H1 转为 rejected，再允许形成 H2。
-- [ ] H2 的 `evidence_basis` 引用否定 H1 的 Evidence，并且机制与 H1 有实质区别。
+- [ ] H2 的 `evidence_basis` 只包含程序验证的 Contradicting Evidence ID，并且机制与 H1 有实质区别。
 - [ ] 最终只有 supported Hypothesis 进入补丁与 Validation。
 - [ ] Task 3 加入后不针对该任务修改已冻结的核心 Prompt、Schema 或工具策略。
 
 ## Testing Strategy
 
 - 对 Manifest、Ground Truth、复现性和输入隔离执行任务合同测试。
-- 用合法轨迹以及 parallel active H、missing Evidence basis、H revival、H4 等违规轨迹测试验收器。
+- 用合法轨迹以及 parallel active H、H1 自由文本 Basis、H2 missing/unknown/duplicate Evidence ID、H revival、H4 等违规轨迹测试验收器。
 - 用 FakeModelProvider 确定性地产生 H1 reject→H2 supported 路径。
 - 显式运行真实模型，并人工核查 H1 合理性、H2 差异和因果机制。
 

@@ -19,9 +19,9 @@ CodeRCA 的核心招聘信号不是自由对话式 ReAct，而是由程序维护
 ## Scope
 
 - 实现 Preparing、Forming Hypothesis、Diagnosing 和失败时 Finalizing 的最小状态路径。
-- 定义只返回一个 Proposal 的 `FormHypothesisDecision`，ID 由程序分配。
+- 定义只返回一个 Proposal、且不暴露 Evidence Basis 的 `FormHypothesisDecision`，ID 与空 Evidence Basis 由程序分配。
 - 首次只形成 H1；同一时刻最多一个 Active Hypothesis。
-- 建立 H1～H3 append-only History、rejected no-revival、no-H4 和 Reformulation 前置约束。
+- 建立 H1～H3 append-only History、rejected no-revival、no-H4 和 Reformulation 前置约束；以独立 `ReformulateHypothesisDecision` 接收 H2/H3 的 Evidence ID。
 - 建立 H1、Experiment、Evidence、Hypothesis Assessment、Reformulation 和 Validation 的确定性 Context View 基础。
 - 从 Task Manifest 安全解析 CI artifact，并只把 bounded excerpt 放入 Working Context。
 - Schema 首次失败允许一次明确纠错，第二次失败产生 Schema Failure。
@@ -34,12 +34,12 @@ CodeRCA 的核心招聘信号不是自由对话式 ReAct，而是由程序维护
 
 ## Technical Approach
 
-使用轻量显式状态机控制生命周期。Hypothesis 包含程序分配的稳定 ID、位置、机制、falsification criterion、可选 Evidence basis 和状态。状态机维护 append-only History 与预算；模型不能生成 ID、覆盖历史或写状态。`ContextBuilder` 根据 Decision Type 从结构化状态投影 Working Context，Raw Model Response 与 Tool Result 只保存在 Run Artifact 中。
+使用轻量显式状态机控制生命周期。Hypothesis 包含程序分配的稳定 ID、位置、机制、falsification criterion、程序验证的 Evidence Basis 和状态。H1 Schema 不含 Evidence Basis，程序固定保存为空；H2/H3 的独立 Reformulation 合同只提交 Evidence ID，状态机将它们解析为真实 Evidence，并验证其属于已结束的 Hypothesis History。状态机维护 append-only History 与预算；模型不能生成 ID、伪造自由文本依据、覆盖历史或写状态。`ContextBuilder` 根据 Decision Type 从结构化状态投影 Working Context，Raw Model Response 与 Tool Result 只保存在 Run Artifact 中。
 
 ## Implementation Steps
 
-1. 将复数形成合同改为单个 Proposal，并由程序分配 H1。
-2. 实现 single-active、H1～H3 History、no revival/no H4 与形成前置条件。
+1. 将复数形成合同改为不含 Evidence Basis 的单个 H1 Proposal，并由程序分配 H1。
+2. 实现独立 Reformulation 合同、single-active、H1～H3 History、Evidence ID 校验、no revival/no H4 与形成前置条件。
 3. 实现确定性的 decision-specific ContextBuilder 基础。
 4. 安全解析 Manifest 相对 CI artifact，拒绝目录逃逸并限制片段长度。
 5. 保留一次 Schema correction 与 Schema Failure 路径。
@@ -47,10 +47,10 @@ CodeRCA 的核心招聘信号不是自由对话式 ReAct，而是由程序维护
 
 ## Acceptance Criteria
 
-- [x] 合法初始运行只形成一个 H1，ID 由程序分配。
+- [x] 合法初始运行只形成一个 H1，ID 与空 Evidence Basis 由程序分配；自由文本 `evidence_basis` 被 H1 Schema 拒绝。
 - [x] 有 Active Hypothesis 时不能形成下一个；H1 ended 后才能形成 H2。
 - [x] History 只允许 H1、H2、H3 顺序追加，不允许 H4、覆盖或复活 rejected H。
-- [x] H2/H3 Proposal 必须携带推动 Reformulation 的 Evidence basis。
+- [x] H2/H3 使用独立 Reformulation 合同，Evidence Basis 只能包含有序、唯一、真实且属于已结束 History 的 Evidence ID。
 - [x] Context View 按 Decision 选择相关状态，不包含完整 Conversation History 或全部 Model Response。
 - [x] 大 Observation 只以 bounded excerpt 与 Artifact ref 进入 Context。
 - [x] CI artifact 从 Task 目录内安全解析，路径逃逸被拒绝。
@@ -60,7 +60,7 @@ CodeRCA 的核心招聘信号不是自由对话式 ReAct，而是由程序维护
 ## Testing Strategy
 
 - 表驱动验证合法和非法生命周期转换。
-- 验证 single-active、reject-before-H2、rejected no-revival、H2/H3 顺序和 no-H4。
+- 验证 H1 Schema 无 Evidence Basis、single-active、reject-before-H2、真实 Evidence ID 解析、rejected no-revival、H2/H3 顺序和 no-H4。
 - 分别验证 H1、Experiment、Evidence、Hypothesis Assessment、Reformulation 和 Validation Context View。
 - 验证 Context 不回放完整历史，并对大 Observation 使用 bounded excerpt。
 - 验证 CI artifact 内容而非路径字符串进入 H1 Context。

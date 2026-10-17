@@ -127,7 +127,7 @@ class DiagnosisApplicationService:
             attempt=attempt,
             response=structured_response.persistence_safe_artifact,
         )
-        hypothesis = state.form_hypothesis(structured_response.value)
+        hypothesis = state.form_initial_hypothesis(structured_response.value)
         summary = f"Formed initial Active Hypothesis {hypothesis.hypothesis_id}."
         events.append(
             DiagnosisEvent(

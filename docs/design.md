@@ -155,6 +155,8 @@ Diagnosis Run 是 Agent 对一个 Diagnosis Task 的一次执行。它拥有：
 - Hypothesis ID 只能由程序按 H1、H2、H3 分配，History append-only；
 - 只有当前 Hypothesis 进入 `rejected` 或 `inconclusive` 且预算剩余时才能 Reformulate；
 - rejected Hypothesis 不得复活、覆盖或重新定义，H3 之后不得形成 H4；
+- H1 的 Formation Schema 不含 Evidence Basis，程序将其固定为空；
+- H2/H3 的 Evidence Basis 只能来自 `ReformulateHypothesisDecision` 引用的有序、唯一 Evidence ID，且程序验证这些 Evidence 属于已结束的 Hypothesis History；
 - Evidence 必须引用工具结果或输入 artifact；
 - Evidence 只有方向、来源和解释，不包含数值 Score 或 Ranking；
 - 只有 supported Hypothesis 可以生成正式候选补丁；
@@ -200,7 +202,8 @@ stateDiagram-v2
 
 模型不填写一个万能决策对象。各阶段使用字段较少的独立 Schema：
 
-- `FormHypothesisDecision`：形成一个不带 ID 的可证伪 Hypothesis Proposal；
+- `FormHypothesisDecision`：形成一个不带 ID、也不带 Evidence Basis 的初始 H1 Proposal；
+- `ReformulateHypothesisDecision`：形成一个 H2/H3 Proposal，并引用至少一个有序、唯一的既有 Evidence ID；
 - `SelectExperimentDecision`：选择 Hypothesis、工具、目的、预期 Observation 和参数；
 - `UpdateEvidenceDecision`：将 Observation 解释为支持、反对或无信息 Evidence；
 - `HypothesisAssessmentDecision`：基于 Evidence 提议继续、falsified、sufficiently supported 或 inconclusive；
@@ -225,7 +228,7 @@ CLI 在状态机外设置一次总运行超时。MVP 不同时维护 Token、费
 
 Observation 不直接改变 Hypothesis 生命周期。模型先把 Observation 解释为带 provenance 的 Supporting、Contradicting 或 Inconclusive Evidence，再提交引用具体 Evidence ID 的结构化 Assessment。程序检查所有引用属于当前 Active Hypothesis，并将 `falsified`、`sufficiently_supported` 等 Assessment 映射到合法状态；模型不能分配 ID、写入状态或维护 Budget。
 
-H1 可基于 Task 与 CI Failure 形成。H2/H3 必须引用推动 Reformulation 的 Evidence，并看到已经结束的 Hypothesis History、相关代码/diff/测试 Observation 和剩余预算；不得仅换一种措辞重复 rejected 机制。
+H1 可基于 Task 与 CI Failure 形成，但这些初始线索不是正式 Evidence，因此其 Schema 不暴露 `evidence_basis`，程序保存的 Evidence Basis 固定为空。H2/H3 使用独立的 `ReformulateHypothesisDecision` 引用推动 Reformulation 的 Evidence ID；程序拒绝空值、重复、未知 ID，以及不属于 `rejected`/`inconclusive` History 的 Evidence。Reformulation 同时看到已经结束的 Hypothesis History、相关代码/diff/测试 Observation 和剩余预算，不得仅换一种措辞重复 rejected 机制。
 
 ## 8. 上下文工程与模型边界
 

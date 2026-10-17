@@ -74,6 +74,10 @@ _Avoid_: Candidate Pool、可变候选列表、Conversation History
 引用 Observation、具有可追溯来源、方向和解释，用于判断一个 Hypothesis 是否仍可成立的信息记录。
 _Avoid_: Evidence Score、模型自信度、无引用解释、一般知识
 
+**Evidence Basis（证据依据）**:
+程序验证后保存在 H2/H3 上的一组有序、唯一 Evidence ID，说明哪些既有 Evidence 推动了本次 Reformulation；H1 的 Evidence Basis 永远为空。
+_Avoid_: 自由文本理由、Task/Manifest 字段、未经注册的 Evidence ID、H1 初始线索
+
 **Supporting Evidence（支持证据）**:
 提高某个 Hypothesis 可信度的 Evidence。
 _Avoid_: 已经证明假设

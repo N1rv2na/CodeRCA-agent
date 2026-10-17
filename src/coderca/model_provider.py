@@ -438,7 +438,6 @@ class FakeModelProvider:
                         "falsification_criterion": (
                             "The changed branch preserves the failing input."
                         ),
-                        "evidence_basis": [],
                     }
                 }
             }
