@@ -60,6 +60,26 @@ class RunStore:
         self._write_json(path, response.value)
         return str(path.relative_to(artifacts.run_directory))
 
+    def write_model_response(
+        self,
+        artifacts: RunArtifacts,
+        *,
+        decision_name: str,
+        sequence: int,
+        response: PersistenceSafeModelArtifact,
+    ) -> str:
+        if not decision_name or not decision_name.replace("_", "").isalnum():
+            raise ValueError("decision_name must contain only letters and underscores")
+        if sequence < 1:
+            raise ValueError("model response sequence must be positive")
+        artifacts.model_responses_directory.mkdir(parents=True, exist_ok=True)
+        path = (
+            artifacts.model_responses_directory
+            / f"{sequence:02d}-{decision_name.replace('_', '-')}.json"
+        )
+        self._write_json(path, response.value)
+        return str(path.relative_to(artifacts.run_directory))
+
     @staticmethod
     def _write_json(path: Path, value: object) -> None:
         path.write_text(

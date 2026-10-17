@@ -11,8 +11,12 @@ from coderca.contracts import (
     FormHypothesisDecision,
     Hypothesis,
     HypothesisAssessmentDecision,
+    HypothesisAssessmentOutcome,
     HypothesisProposal,
     ReformulateHypothesisDecision,
+    SelectExperimentDecision,
+    ToolResult,
+    UpdateEvidenceDecision,
 )
 from coderca.diagnosis_state import DiagnosisStateMachine, InvalidDiagnosisTransition
 
@@ -28,9 +32,7 @@ def proposal(index: int) -> HypothesisProposal:
 
 def form_h1(state: DiagnosisStateMachine) -> Hypothesis:
     state.begin_hypothesis_formation()
-    return state.form_initial_hypothesis(
-        FormHypothesisDecision(hypothesis=proposal(1))
-    )
+    return state.form_initial_hypothesis(FormHypothesisDecision(hypothesis=proposal(1)))
 
 
 def reformulate(
@@ -38,31 +40,58 @@ def reformulate(
     index: int,
     *,
     evidence_refs: tuple[str, ...],
-    evidence: list[Evidence],
 ) -> Hypothesis:
     state.begin_hypothesis_formation()
     return state.reformulate_hypothesis(
         ReformulateHypothesisDecision(
             hypothesis=proposal(index), evidence_refs=evidence_refs
-        ),
-        evidence=evidence,
+        )
     )
 
 
-def evidence_record(
-    evidence_id: str,
-    hypothesis_id: str,
+def register_evidence(
+    state: DiagnosisStateMachine,
     *,
     direction: EvidenceDirection = "contradicting",
 ) -> Evidence:
-    return Evidence(
-        evidence_id=evidence_id,
-        hypothesis_id=hypothesis_id,
-        observation_ref=f"O-{evidence_id}",
-        provenance=f"read_code:tool-results/{evidence_id}.txt",
-        direction=direction,
-        explanation="The Observation changes the diagnosis direction.",
+    active = state.active_hypothesis
+    assert active is not None
+    sequence = len(state.experiments) + 1
+    current = experiment(active.hypothesis_id).model_copy(
+        update={"experiment_id": f"X{sequence}"}
     )
+    state.begin_experiment(current)
+    observation = state.record_observation(
+        successful_tool_result(
+            experiment_id=current.experiment_id,
+            hypothesis_id=active.hypothesis_id,
+        )
+    )
+    return state.record_evidence(
+        UpdateEvidenceDecision(
+            hypothesis_id=active.hypothesis_id,
+            observation_ref=observation.observation_id,
+            direction=direction,
+            explanation="The Observation changes the diagnosis direction.",
+        )
+    )
+
+
+def assess_active(
+    state: DiagnosisStateMachine,
+    *,
+    outcome: HypothesisAssessmentOutcome = "falsified",
+    direction: EvidenceDirection = "contradicting",
+) -> Evidence:
+    evidence = register_evidence(state, direction=direction)
+    state.apply_hypothesis_assessment(
+        HypothesisAssessmentDecision(
+            outcome=outcome,
+            evidence_refs=(evidence.evidence_id,),
+            rationale="The registered Evidence determines the lifecycle outcome.",
+        )
+    )
+    return evidence
 
 
 def test_initial_formation_contract_rejects_free_text_evidence_basis() -> None:
@@ -116,13 +145,10 @@ def test_active_hypothesis_blocks_reformulation() -> None:
 def test_rejected_h1_allows_materially_new_h2_with_evidence_basis() -> None:
     state = DiagnosisStateMachine()
     form_h1(state)
-    state.transition_hypothesis("H1", "testing")
-    rejected_h1 = state.transition_hypothesis("H1", "rejected")
-    evidence = evidence_record("E1", "H1")
+    evidence = assess_active(state)
+    rejected_h1 = state.hypothesis_history[0]
 
-    h2 = reformulate(
-        state, 2, evidence_refs=("E1",), evidence=[evidence]
-    )
+    h2 = reformulate(state, 2, evidence_refs=(evidence.evidence_id,))
 
     assert rejected_h1.status == "rejected"
     assert h2.hypothesis_id == "H2"
@@ -141,21 +167,36 @@ def test_reformulation_rejects_unknown_evidence_id() -> None:
         hypothesis=proposal(2), evidence_refs=("E-unknown",)
     )
     with pytest.raises(InvalidDiagnosisTransition, match="unknown Evidence"):
-        state.reformulate_hypothesis(decision, evidence=[])
+        state.reformulate_hypothesis(decision)
 
 
-def test_reformulation_rejects_evidence_outside_hypothesis_history() -> None:
+def test_reformulation_cannot_accept_caller_supplied_evidence() -> None:
     state = DiagnosisStateMachine()
     form_h1(state)
     state.transition_hypothesis("H1", "rejected")
-    outside = evidence_record("E9", "H9")
-
     state.begin_hypothesis_formation()
     decision = ReformulateHypothesisDecision(
         hypothesis=proposal(2), evidence_refs=("E9",)
     )
-    with pytest.raises(InvalidDiagnosisTransition, match="ended Hypothesis History"):
-        state.reformulate_hypothesis(decision, evidence=[outside])
+    with pytest.raises(TypeError, match="evidence"):
+        state.reformulate_hypothesis(  # type: ignore[call-arg]
+            decision,
+            evidence=[contradicting_evidence("H9")],
+        )
+
+
+def test_reformulation_rejects_a_rewording_free_exact_mechanism_repeat() -> None:
+    state = DiagnosisStateMachine()
+    h1 = form_h1(state)
+    assess_active(state)
+    state.begin_hypothesis_formation()
+    repeated = ReformulateHypothesisDecision(
+        hypothesis=proposal(2).model_copy(update={"mechanism": f"  {h1.mechanism}  "}),
+        evidence_refs=("E1",),
+    )
+
+    with pytest.raises(InvalidDiagnosisTransition, match="materially different"):
+        state.reformulate_hypothesis(repeated)
 
 
 def test_rejected_hypothesis_is_immutable_and_cannot_revive() -> None:
@@ -173,17 +214,14 @@ def test_rejected_hypothesis_is_immutable_and_cannot_revive() -> None:
 def test_h2_rejected_allows_h3_but_h3_end_exhausts_budget() -> None:
     state = DiagnosisStateMachine()
     form_h1(state)
-    state.transition_hypothesis("H1", "rejected")
-    evidence_1 = evidence_record("E1", "H1")
-    reformulate(state, 2, evidence_refs=("E1",), evidence=[evidence_1])
-    state.transition_hypothesis("H2", "rejected")
-    evidence_2 = evidence_record("E2", "H2")
+    assess_active(state)
+    reformulate(state, 2, evidence_refs=("E1",))
+    assess_active(state)
 
     h3 = reformulate(
         state,
         3,
         evidence_refs=("E1", "E2"),
-        evidence=[evidence_1, evidence_2],
     )
     state.transition_hypothesis("H3", "inconclusive")
 
@@ -262,6 +300,27 @@ def test_experiment_must_bind_the_current_active_hypothesis() -> None:
         state.authorize_experiment(experiment("H2"))
 
 
+@pytest.mark.parametrize(
+    "missing_field",
+    ["purpose", "expected_observation", "falsification_relevance"],
+)
+def test_experiment_decision_requires_falsification_metadata_before_execution(
+    missing_field: str,
+) -> None:
+    payload: dict[str, object] = {
+        "hypothesis_id": "H1",
+        "purpose": "Inspect the relevant branch.",
+        "expected_observation": "The branch preserves explicit false.",
+        "falsification_relevance": "That result contradicts H1.",
+        "tool_name": "read_code",
+        "arguments": {"path": "src/module.py"},
+    }
+    del payload[missing_field]
+
+    with pytest.raises(ValidationError, match=missing_field):
+        SelectExperimentDecision.model_validate(payload)
+
+
 def test_rejected_hypothesis_cannot_receive_an_experiment() -> None:
     state = DiagnosisStateMachine()
     form_h1(state)
@@ -280,9 +339,9 @@ def test_contradicting_evidence_allows_program_owned_rejection() -> None:
         rationale="The observed code contradicts the proposed mechanism.",
     )
 
-    rejected = state.apply_hypothesis_assessment(
-        assessment, evidence=[contradicting_evidence("H1")]
-    )
+    registered = register_evidence(state)
+    assert registered.evidence_id == "E1"
+    rejected = state.apply_hypothesis_assessment(assessment)
 
     assert rejected.hypothesis_id == "H1"
     assert rejected.status == "rejected"
@@ -297,29 +356,126 @@ def test_falsified_assessment_without_contradicting_evidence_is_rejected() -> No
         evidence_refs=("E1",),
         rationale="Unsupported rejection attempt.",
     )
-    supporting = contradicting_evidence("H1").model_copy(
-        update={"direction": "supporting"}
-    )
+    register_evidence(state, direction="supporting")
 
     with pytest.raises(InvalidDiagnosisTransition, match="Contradicting Evidence"):
-        state.apply_hypothesis_assessment(assessment, evidence=[supporting])
+        state.apply_hypothesis_assessment(assessment)
+    assert state.stage is DiagnosisStage.UPDATING_EVIDENCE
+    assert state.active_hypothesis is not None
 
 
 def test_continue_testing_assessment_keeps_testing_hypothesis_active() -> None:
     state = DiagnosisStateMachine()
     form_h1(state)
-    supporting = contradicting_evidence("H1").model_copy(
-        update={"direction": "supporting"}
-    )
+    register_evidence(state, direction="supporting")
     assessment = HypothesisAssessmentDecision(
         outcome="continue_testing",
         evidence_refs=("E1",),
         rationale="More discriminating evidence is needed.",
     )
 
-    first = state.apply_hypothesis_assessment(assessment, evidence=[supporting])
-    second = state.apply_hypothesis_assessment(assessment, evidence=[supporting])
+    first = state.apply_hypothesis_assessment(assessment)
 
     assert first.status == "testing"
-    assert second.status == "testing"
-    assert state.active_hypothesis == second
+    assert state.active_hypothesis == first
+    with pytest.raises(InvalidDiagnosisTransition, match="updating_evidence"):
+        state.apply_hypothesis_assessment(assessment)
+
+
+def successful_tool_result(
+    experiment_id: str = "X1", hypothesis_id: str = "H1"
+) -> ToolResult:
+    return ToolResult(
+        tool_result_id="T1",
+        experiment_id=experiment_id,
+        hypothesis_id=hypothesis_id,
+        tool_name="read_code",
+        status="success",
+        output="1: value = configured if configured is not None else default\n",
+        artifact_ref="tool-results/T1.txt",
+        duration_ms=1,
+    )
+
+
+def test_tool_result_observation_and_evidence_are_program_linked() -> None:
+    state = DiagnosisStateMachine(tool_call_limit=8)
+    form_h1(state)
+    current = experiment("H1")
+
+    state.begin_experiment(current)
+    assert state.stage is DiagnosisStage.EXECUTING_TOOL
+    observation = state.record_observation(successful_tool_result())
+    assert state.stage is DiagnosisStage.UPDATING_EVIDENCE
+    evidence = state.record_evidence(
+        UpdateEvidenceDecision(
+            hypothesis_id="H1",
+            observation_ref=observation.observation_id,
+            direction="contradicting",
+            explanation="The explicit value is preserved, contradicting H1.",
+        )
+    )
+
+    assert state.used_tool_calls == 1
+    assert observation.observation_id == "O1"
+    assert observation.tool_result_ref == "T1"
+    assert observation.artifact_ref == "tool-results/T1.txt"
+    assert evidence.evidence_id == "E1"
+    assert evidence.observation_ref == "O1"
+    assert evidence.provenance == "read_code:tool-results/T1.txt"
+    assert state.observations == (observation,)
+    assert state.evidence == (evidence,)
+
+
+def test_observation_rejects_a_tool_result_for_another_experiment() -> None:
+    state = DiagnosisStateMachine()
+    form_h1(state)
+    state.begin_experiment(experiment("H1"))
+
+    with pytest.raises(InvalidDiagnosisTransition, match="current Experiment"):
+        state.record_observation(successful_tool_result("X-other"))
+
+
+def test_observation_and_evidence_reject_out_of_stage_mutation() -> None:
+    state = DiagnosisStateMachine()
+    form_h1(state)
+
+    with pytest.raises(InvalidDiagnosisTransition, match="executing_tool"):
+        state.record_observation(successful_tool_result())
+    with pytest.raises(InvalidDiagnosisTransition, match="updating_evidence"):
+        state.record_evidence(
+            UpdateEvidenceDecision(
+                hypothesis_id="H1",
+                observation_ref="O1",
+                direction="supporting",
+                explanation="No registered Observation exists.",
+            )
+        )
+
+    assert state.observations == ()
+    assert state.evidence == ()
+
+
+def test_tool_budget_stops_before_a_second_execution() -> None:
+    state = DiagnosisStateMachine(tool_call_limit=1)
+    form_h1(state)
+    current = experiment("H1")
+    state.begin_experiment(current)
+    observation = state.record_observation(successful_tool_result())
+    evidence = state.record_evidence(
+        UpdateEvidenceDecision(
+            hypothesis_id="H1",
+            observation_ref=observation.observation_id,
+            direction="inconclusive",
+            explanation="The code does not discriminate the mechanism.",
+        )
+    )
+    state.apply_hypothesis_assessment(
+        HypothesisAssessmentDecision(
+            outcome="continue_testing",
+            evidence_refs=(evidence.evidence_id,),
+            rationale="Another Experiment would be needed.",
+        )
+    )
+
+    with pytest.raises(InvalidDiagnosisTransition, match="Tool budget exhausted"):
+        state.begin_experiment(current.model_copy(update={"experiment_id": "X2"}))

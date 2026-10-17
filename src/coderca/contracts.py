@@ -10,6 +10,15 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 
 NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
 DiagnosisFailureCategory = Literal["schema_failure", "infrastructure_failure"]
+DiagnosisStopReason = (
+    DiagnosisFailureCategory
+    | Literal[
+        "read_only_diagnosis_complete",
+        "hypothesis_budget_exhausted",
+        "tool_budget_exhausted",
+        "tool_failure",
+    ]
+)
 DiagnosisEventFailureCategory = (
     DiagnosisFailureCategory
     | Literal[
@@ -22,6 +31,9 @@ HypothesisStatus = Literal[
     "proposed", "testing", "supported", "rejected", "inconclusive"
 ]
 EvidenceDirection = Literal["supporting", "contradicting", "inconclusive"]
+ToolErrorCategory = Literal[
+    "invalid_arguments", "permission_denied", "timeout", "execution_failed"
+]
 HypothesisAssessmentOutcome = Literal[
     "continue_testing", "falsified", "sufficiently_supported", "inconclusive"
 ]
@@ -33,6 +45,9 @@ class DiagnosisStage(str, Enum):
     PREPARING = "preparing"
     FORMING_HYPOTHESIS = "forming_hypothesis"
     DIAGNOSING = "diagnosing"
+    EXECUTING_TOOL = "executing_tool"
+    UPDATING_EVIDENCE = "updating_evidence"
+    VALIDATING = "validating"
     FINALIZING = "finalizing"
 
 
@@ -131,6 +146,47 @@ class Experiment(ContractModel):
     arguments: dict[str, Any]
 
 
+class SelectExperimentDecision(ContractModel):
+    """Model-selected Experiment before program ID assignment."""
+
+    hypothesis_id: NonEmptyString
+    purpose: NonEmptyString
+    expected_observation: NonEmptyString
+    falsification_relevance: NonEmptyString
+    tool_name: NonEmptyString
+    arguments: dict[str, Any]
+
+
+class ToolResult(ContractModel):
+    """Auditable result of one Tool Runtime invocation."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False, frozen=True)
+
+    tool_result_id: NonEmptyString
+    experiment_id: NonEmptyString
+    hypothesis_id: NonEmptyString
+    tool_name: NonEmptyString
+    status: Literal["success", "error"]
+    output: str = ""
+    artifact_ref: NonEmptyString
+    truncated: bool = False
+    duration_ms: int = Field(ge=0)
+    error_category: ToolErrorCategory | None = None
+    error_message: str | None = None
+
+    @model_validator(mode="after")
+    def require_consistent_status(self) -> ToolResult:
+        if self.status == "success" and (
+            self.error_category is not None or self.error_message is not None
+        ):
+            raise ValueError("successful Tool Result cannot contain an error")
+        if self.status == "error" and (
+            self.error_category is None or not self.error_message
+        ):
+            raise ValueError("failed Tool Result requires a classified error")
+        return self
+
+
 class Observation(ContractModel):
     """A structured, artifact-backed result produced by an Experiment."""
 
@@ -139,6 +195,7 @@ class Observation(ContractModel):
     observation_id: NonEmptyString
     experiment_id: NonEmptyString
     hypothesis_id: NonEmptyString
+    tool_result_ref: NonEmptyString
     source: NonEmptyString
     summary: NonEmptyString
     artifact_ref: NonEmptyString
@@ -154,6 +211,15 @@ class Evidence(ContractModel):
     hypothesis_id: NonEmptyString
     observation_ref: NonEmptyString
     provenance: NonEmptyString
+    direction: EvidenceDirection
+    explanation: NonEmptyString
+
+
+class UpdateEvidenceDecision(ContractModel):
+    """Model interpretation of one real Observation before program IDs it."""
+
+    hypothesis_id: NonEmptyString
+    observation_ref: NonEmptyString
     direction: EvidenceDirection
     explanation: NonEmptyString
 
@@ -177,16 +243,23 @@ class DiagnosisEvent(ContractModel):
     model_response_artifact: NonEmptyString | None = None
     failure_category: DiagnosisEventFailureCategory | None = None
     validation_errors: list[dict[str, Any]] = Field(default_factory=list)
+    experiment: Experiment | None = None
+    tool_result: ToolResult | None = None
+    observation: Observation | None = None
+    evidence: Evidence | None = None
 
 
 class DiagnosisReport(ContractModel):
     run_id: NonEmptyString
     task_id: NonEmptyString
     stage: DiagnosisStage
-    status: Literal["in_progress", "failed"]
-    stop_reason: DiagnosisFailureCategory | None = None
+    status: Literal["in_progress", "completed", "failed"]
+    stop_reason: DiagnosisStopReason | None = None
     summary: NonEmptyString
     hypothesis_history: list[Hypothesis] = Field(default_factory=list)
+    final_hypothesis: Hypothesis | None = None
+    observations: list[Observation] = Field(default_factory=list)
+    evidence: list[Evidence] = Field(default_factory=list)
 
 
 class RunArtifacts(ContractModel):
@@ -201,10 +274,12 @@ class DiagnosisRunResult(ContractModel):
     run_id: NonEmptyString
     task_id: NonEmptyString
     stage: DiagnosisStage
-    status: Literal["in_progress", "failed"]
-    stop_reason: DiagnosisFailureCategory | None = None
+    status: Literal["in_progress", "completed", "failed"]
+    stop_reason: DiagnosisStopReason | None = None
     summary: NonEmptyString
     hypothesis_history: tuple[Hypothesis, ...] = ()
+    observations: tuple[Observation, ...] = ()
+    evidence: tuple[Evidence, ...] = ()
     run_directory: Path
     manifest_path: Path
     events_path: Path

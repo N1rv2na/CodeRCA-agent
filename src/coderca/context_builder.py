@@ -70,7 +70,9 @@ class ContextBuilder:
                 "form_hypothesis" if not history else "reformulate_hypothesis"
             ),
             "task_context": self._task_context(task),
-            "diagnosis_state": self._diagnosis_state(task, state, used_tool_calls=0),
+            "diagnosis_state": self._diagnosis_state(
+                task, state, used_tool_calls=state.used_tool_calls
+            ),
         }
         if history:
             ended_ids = {

@@ -13,9 +13,12 @@ from coderca.contracts import (
     Evidence,
     Experiment,
     FormHypothesisDecision,
+    HypothesisAssessmentDecision,
     HypothesisProposal,
     Observation,
     TaskManifest,
+    ToolResult,
+    UpdateEvidenceDecision,
 )
 from coderca.diagnosis_state import DiagnosisStateMachine
 
@@ -73,6 +76,7 @@ def diagnostic_records() -> tuple[Experiment, Observation, Evidence]:
         observation_id="O1",
         experiment_id="X1",
         hypothesis_id="H1",
+        tool_result_ref="T1",
         source="read_code",
         summary="The branch checks `value is not None`.",
         artifact_ref="tool-results/O1.txt",
@@ -165,9 +169,38 @@ def test_assessment_context_contains_only_active_hypothesis_knowledge() -> None:
 
 
 def test_h2_context_contains_rejected_h1_and_rejection_knowledge() -> None:
-    state = state_with_h1()
-    state.transition_hypothesis("H1", "rejected")
-    _, observation, evidence = diagnostic_records()
+    state = DiagnosisStateMachine(tool_call_limit=8)
+    state.begin_hypothesis_formation()
+    state.form_initial_hypothesis(FormHypothesisDecision(hypothesis=proposal(1)))
+    current, _, _ = diagnostic_records()
+    state.begin_experiment(current)
+    observation = state.record_observation(
+        ToolResult(
+            tool_result_id="T1",
+            experiment_id="X1",
+            hypothesis_id="H1",
+            tool_name="read_code",
+            status="success",
+            output="1: value = 1\n",
+            artifact_ref="tool-results/T1.txt",
+            duration_ms=1,
+        )
+    )
+    evidence = state.record_evidence(
+        UpdateEvidenceDecision(
+            hypothesis_id="H1",
+            observation_ref="O1",
+            direction="contradicting",
+            explanation="The observed implementation contradicts H1.",
+        )
+    )
+    state.apply_hypothesis_assessment(
+        HypothesisAssessmentDecision(
+            outcome="falsified",
+            evidence_refs=("E1",),
+            rationale="The registered Evidence falsifies H1.",
+        )
+    )
 
     context = ContextBuilder().build_form_hypothesis(
         task_context(),
@@ -182,6 +215,7 @@ def test_h2_context_contains_rejected_h1_and_rejection_knowledge() -> None:
     observations = context["reformulation_knowledge"]["observations"]
     assert observations[0]["observation_id"] == "O1"
     assert context["diagnosis_state"]["remaining_hypothesis_budget"] == 2
+    assert context["diagnosis_state"]["remaining_tool_budget"] == 7
     assert "x" * 1_000 not in str(context)
 
 

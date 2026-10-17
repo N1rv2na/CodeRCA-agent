@@ -5,6 +5,7 @@ from pathlib import Path
 
 from pydantic import SecretStr
 
+from coderca.benchmark import materialize_task_1
 from coderca.cli import main
 from coderca.model_provider import (
     FakeModelProvider,
@@ -131,3 +132,74 @@ def test_cli_explicit_configured_provider_runs_formation_path_without_network(
     assert configuration.structured_output_mode is (StructuredOutputMode.JSON_TEXT)
     assert api_key.get_secret_value() == "secret-key"
     assert capsys.readouterr().err == ""  # type: ignore[attr-defined]
+
+
+def test_cli_workspace_runs_the_read_only_diagnosis_loop(
+    tmp_path: Path, valid_manifest_data: dict[str, object], capsys: object
+) -> None:
+    del valid_manifest_data
+    manifest_path = Path("benchmarks/django-waffle/task-1/manifest.json")
+    workspace = materialize_task_1(tmp_path / "workspace")
+    provider = FakeModelProvider(
+        {
+            "form_hypothesis": {
+                "hypothesis": {
+                    "root_symbol": "AbstractBaseFlag.is_active_for_user",
+                    "location_description": None,
+                    "mechanism": "A fallback discards explicit zero.",
+                    "falsification_criterion": "The code preserves explicit zero.",
+                }
+            },
+            "select_experiment": {
+                "hypothesis_id": "H1",
+                "purpose": "Inspect the Faulty Commit diff.",
+                "expected_observation": "The boolean condition changed.",
+                "falsification_relevance": "No condition change falsifies H1.",
+                "tool_name": "inspect_diff",
+                "arguments": {"path": "waffle/models.py"},
+            },
+            "update_evidence": {
+                "hypothesis_id": "H1",
+                "observation_ref": "O1",
+                "direction": "supporting",
+                "explanation": "The observed branch matches the claimed location.",
+            },
+            "assess_hypothesis": {
+                "outcome": "sufficiently_supported",
+                "evidence_refs": ["E1"],
+                "rationale": "The code Evidence is sufficient for read-only RCA.",
+            },
+        }
+    )
+
+    exit_code = main(
+        [
+            str(manifest_path),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--workspace",
+            str(workspace),
+        ],
+        provider=provider,
+    )
+
+    assert exit_code == 0
+    summary = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert summary["status"] == "completed"
+    assert summary["stop_reason"] == "read_only_diagnosis_complete"
+    assert summary["active_hypothesis"] is None
+    assert summary["evidence_refs"] == ["E1"]
+
+
+def test_cli_workspace_rejects_the_default_formation_only_fake_provider(
+    tmp_path: Path,
+    valid_manifest_data: dict[str, object],
+    capsys: object,
+) -> None:
+    manifest_path = write_manifest_with_ci_log(tmp_path, valid_manifest_data)
+
+    exit_code = main([str(manifest_path), "--workspace", str(tmp_path)])
+
+    assert exit_code == 2
+    error = json.loads(capsys.readouterr().err)  # type: ignore[attr-defined]
+    assert error["error"]["code"] == "model_provider_required"

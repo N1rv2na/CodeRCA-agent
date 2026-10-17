@@ -47,7 +47,7 @@ Agent 首先只形成 H1。H1 Schema 不接受 Evidence Basis；H2/H3 只能引�
 
 ## 项目状态
 
-项目已完成 MVP Scope Reduction、领域建模与架构设计，当前处于实现阶段。CRCA-001 已提供 Manifest-to-Run walking skeleton，CRCA-002 已冻结 django-waffle Task 1，CRCA-003 已提供通用 OpenAI-compatible ModelProvider 与 Model Compatibility Gate，CRCA-004 已实现受约束的初始 Hypothesis 形成和 decision-specific ContextBuilder；后续完整 Agent Loop、Tool Runtime、Lightweight Code Search、Docker Validation 和 Evaluation Harness 仍在规划中。
+项目已完成 MVP Scope Reduction、领域建模与架构设计，当前处于实现阶段。CRCA-001 已提供 Manifest-to-Run walking skeleton，CRCA-002 已冻结 django-waffle Task 1，CRCA-003 已提供通用 OpenAI-compatible ModelProvider 与 Model Compatibility Gate，CRCA-004 已实现受约束的初始 Hypothesis 形成和 decision-specific ContextBuilder；CRCA-005 已实现 `inspect_diff`/`read_code` 的统一只读 Tool Runtime，以及 Evidence-driven Assessment 和 H1～H3 bounded Reformulation。Lightweight Code Search、Docker Validation 和 Evaluation Harness 仍待后续 Ticket 实现。
 
 - [Implementation specification issue](https://github.com/N1rv2na/CodeRCA-agent/issues/1)
 - 目标交付方式：源码安装 + OpenAI-compatible 云端模型 API + 固定 Docker 镜像 + CLI
@@ -67,7 +67,7 @@ python -m venv .venv
 .venv/bin/coderca MANIFEST.json --runs-dir .coderca-runs
 ```
 
-命令会形成一个由程序分配稳定 ID 的初始 H1，并输出停在 `diagnosing/in_progress` 的结构化状态摘要。CI 日志由 Task Manifest 相对路径安全解析，Working Context 只接收有界片段。每个 Diagnosis Run 目录包含 `manifest.json`、`events.jsonl`、`report.json` 和脱敏模型响应 Artifact。当前 CLI 默认使用确定性的 `FakeModelProvider`，不会调用真实云端模型 API，也不会执行仓库工具或补丁验证。
+未指定代码工作区时，命令只形成一个由程序分配稳定 ID 的初始 H1，并输出停在 `diagnosing/in_progress` 的结构化状态摘要。CI 日志由 Task Manifest 相对路径安全解析，Working Context 只接收有界片段。每个 Diagnosis Run 目录包含 `manifest.json`、`events.jsonl`、`report.json` 和脱敏模型响应 Artifact。CLI 默认使用确定性的 `FakeModelProvider`，不会调用真实云端模型 API。
 
 在 CRCA-003 的 Model Compatibility Gate 已通过后，可显式运行真实模型的 Hypothesis 形成验收；默认命令和自动化测试仍不读取 API Key 或访问网络：
 
@@ -79,10 +79,11 @@ export CODERCA_MODEL_STRUCTURED_OUTPUT_MODE="json_text"
 
 .venv/bin/coderca MANIFEST.json \
   --runs-dir .coderca-runs \
-  --model-provider openai-compatible
+  --model-provider openai-compatible \
+  --workspace /path/to/prepared-faulty-commit
 ```
 
-需要 Endpoint 专属调用参数时，可另外显式配置 `CODERCA_MODEL_REQUEST_EXTENSIONS`。真实模型命令只验证当前形成阶段；它不会执行诊断工具或补丁验证。
+`--workspace` 必须指向 `HEAD` 与 Manifest `faulty_commit` 一致的已准备 Git 工作区。指定该参数后，CRCA-005 会运行受八次 Tool Budget 约束的只读诊断循环，允许模型在当前 Active Hypothesis 上自主选择 `inspect_diff` 或 `read_code`，并把 Tool Result、Observation、Evidence、Assessment、Reformulation 和只读 Root Cause Report 写入运行目录。需要 Endpoint 专属调用参数时，可另外显式配置 `CODERCA_MODEL_REQUEST_EXTENSIONS`。当前版本仍不会运行测试、应用补丁或执行 Docker Validation。
 
 ## 文档
 

@@ -22,6 +22,7 @@ from .model_provider import (
     load_model_environment,
 )
 from .run_store import RunStore
+from .tool_runtime import ToolRuntime
 
 
 class ProviderFactory(Protocol):
@@ -93,8 +94,45 @@ def main(
     if selected_provider is None:
         selected_provider = FakeModelProvider()
 
+    tool_runtime = None
+    if args.workspace is not None:
+        if provider is None and args.model_provider == "fake":
+            _write_error(
+                StructuredError(
+                    code="model_provider_required",
+                    message=(
+                        "The read-only diagnosis loop requires an explicitly "
+                        "configured ModelProvider."
+                    ),
+                    details={"model_provider": args.model_provider},
+                )
+            )
+            return 2
+        workspace = Path(args.workspace)
+        if not workspace.is_dir():
+            _write_error(
+                StructuredError(
+                    code="workspace_error",
+                    message="Faulty Commit workspace is not a directory.",
+                    details={"path": str(workspace)},
+                )
+            )
+            return 2
+        try:
+            tool_runtime = ToolRuntime(workspace, manifest)
+        except ValueError as exc:
+            _write_error(
+                StructuredError(
+                    code="workspace_error",
+                    message="Faulty Commit workspace failed validation.",
+                    details={"path": str(workspace), "reason": str(exc)},
+                )
+            )
+            return 2
     service = DiagnosisApplicationService(
-        provider=selected_provider, run_store=RunStore(Path(args.runs_dir))
+        provider=selected_provider,
+        run_store=RunStore(Path(args.runs_dir)),
+        tool_runtime=tool_runtime,
     )
     result = service.start_diagnosis(task)
     summary = {
@@ -116,10 +154,11 @@ def main(
             ),
             None,
         ),
+        "evidence_refs": [item.evidence_id for item in result.evidence],
         "run_directory": str(result.run_directory),
     }
     print(json.dumps(summary, sort_keys=True))
-    return 0 if result.status == "in_progress" else 1
+    return 0 if result.status != "failed" else 1
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -137,6 +176,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "model boundary to use; openai-compatible explicitly loads the "
             "CODERCA_MODEL_* environment"
+        ),
+    )
+    parser.add_argument(
+        "--workspace",
+        help=(
+            "prepared Faulty Commit workspace; when present, run the CRCA-005 "
+            "read-only diagnosis loop"
         ),
     )
     return parser

@@ -11,7 +11,10 @@ from .contracts import (
     HypothesisAssessmentDecision,
     HypothesisProposal,
     HypothesisStatus,
+    Observation,
     ReformulateHypothesisDecision,
+    ToolResult,
+    UpdateEvidenceDecision,
 )
 
 _MAX_HYPOTHESES = 3
@@ -29,8 +32,23 @@ _ALLOWED_TRANSITIONS = {
     ),
     DiagnosisStage.FORMING_HYPOTHESIS: frozenset({DiagnosisStage.FINALIZING}),
     DiagnosisStage.DIAGNOSING: frozenset(
-        {DiagnosisStage.FORMING_HYPOTHESIS, DiagnosisStage.FINALIZING}
+        {
+            DiagnosisStage.EXECUTING_TOOL,
+            DiagnosisStage.FORMING_HYPOTHESIS,
+            DiagnosisStage.FINALIZING,
+        }
     ),
+    DiagnosisStage.EXECUTING_TOOL: frozenset(
+        {DiagnosisStage.UPDATING_EVIDENCE, DiagnosisStage.FINALIZING}
+    ),
+    DiagnosisStage.UPDATING_EVIDENCE: frozenset(
+        {
+            DiagnosisStage.DIAGNOSING,
+            DiagnosisStage.VALIDATING,
+            DiagnosisStage.FINALIZING,
+        }
+    ),
+    DiagnosisStage.VALIDATING: frozenset({DiagnosisStage.FINALIZING}),
     DiagnosisStage.FINALIZING: frozenset(),
 }
 
@@ -46,10 +64,23 @@ _ALLOWED_HYPOTHESIS_TRANSITIONS: dict[HypothesisStatus, frozenset[HypothesisStat
 class DiagnosisStateMachine:
     """Own lifecycle, append-only Hypothesis History, IDs, and budgets."""
 
-    def __init__(self, stage: DiagnosisStage = DiagnosisStage.PREPARING) -> None:
+    def __init__(
+        self,
+        stage: DiagnosisStage = DiagnosisStage.PREPARING,
+        *,
+        tool_call_limit: int = 8,
+    ) -> None:
+        if not 1 <= tool_call_limit <= 8:
+            raise ValueError("tool_call_limit must be between 1 and 8")
         self._stage = stage
         self._hypothesis_history: tuple[Hypothesis, ...] = ()
         self._schema_corrections_used = 0
+        self._tool_call_limit = tool_call_limit
+        self._used_tool_calls = 0
+        self._current_experiment: Experiment | None = None
+        self._experiments: tuple[Experiment, ...] = ()
+        self._observations: tuple[Observation, ...] = ()
+        self._evidence: tuple[Evidence, ...] = ()
 
     @property
     def stage(self) -> DiagnosisStage:
@@ -86,6 +117,34 @@ class DiagnosisStateMachine:
     @property
     def schema_corrections_used(self) -> int:
         return self._schema_corrections_used
+
+    @property
+    def used_tool_calls(self) -> int:
+        return self._used_tool_calls
+
+    @property
+    def remaining_tool_budget(self) -> int:
+        return self._tool_call_limit - self._used_tool_calls
+
+    @property
+    def tool_budget_exhausted(self) -> bool:
+        return self.remaining_tool_budget == 0
+
+    @property
+    def current_experiment(self) -> Experiment | None:
+        return self._current_experiment
+
+    @property
+    def experiments(self) -> tuple[Experiment, ...]:
+        return self._experiments
+
+    @property
+    def observations(self) -> tuple[Observation, ...]:
+        return self._observations
+
+    @property
+    def evidence(self) -> tuple[Evidence, ...]:
+        return self._evidence
 
     def transition_to(self, target: DiagnosisStage) -> None:
         if target not in _ALLOWED_TRANSITIONS[self._stage]:
@@ -133,9 +192,7 @@ class DiagnosisStateMachine:
             )
         self._schema_corrections_used += 1
 
-    def form_initial_hypothesis(
-        self, decision: FormHypothesisDecision
-    ) -> Hypothesis:
+    def form_initial_hypothesis(self, decision: FormHypothesisDecision) -> Hypothesis:
         """Append H1 without accepting model-authored Evidence references."""
 
         self._require_formation_ready()
@@ -148,8 +205,6 @@ class DiagnosisStateMachine:
     def reformulate_hypothesis(
         self,
         decision: ReformulateHypothesisDecision,
-        *,
-        evidence: list[Evidence],
     ) -> Hypothesis:
         """Append H2/H3 after resolving every model-cited Evidence ID."""
 
@@ -159,7 +214,7 @@ class DiagnosisStateMachine:
                 "Reformulation requires an ended Hypothesis History"
             )
 
-        evidence_by_id = {item.evidence_id: item for item in evidence}
+        evidence_by_id = {item.evidence_id: item for item in self._evidence}
         try:
             referenced = [evidence_by_id[item] for item in decision.evidence_refs]
         except KeyError as exc:
@@ -172,11 +227,19 @@ class DiagnosisStateMachine:
             for item in self._hypothesis_history
             if item.status in _REFORMULATABLE_STATUSES
         }
-        if any(
-            item.hypothesis_id not in ended_hypothesis_ids for item in referenced
-        ):
+        if any(item.hypothesis_id not in ended_hypothesis_ids for item in referenced):
             raise InvalidDiagnosisTransition(
                 "Reformulation Evidence must belong to ended Hypothesis History"
+            )
+        normalized_mechanism = " ".join(
+            decision.hypothesis.mechanism.split()
+        ).casefold()
+        if any(
+            " ".join(item.mechanism.split()).casefold() == normalized_mechanism
+            for item in self._hypothesis_history
+        ):
+            raise InvalidDiagnosisTransition(
+                "Reformulated Hypothesis mechanism must be materially different"
             )
         return self._append_hypothesis(
             decision.hypothesis, evidence_basis=decision.evidence_refs
@@ -256,20 +319,125 @@ class DiagnosisStateMachine:
                 f"Experiment must bind the Active Hypothesis {active.hypothesis_id}"
             )
 
+    def begin_experiment(self, experiment: Experiment) -> None:
+        """Authorize exactly one Experiment and consume one Tool Budget unit."""
+
+        self.authorize_experiment(experiment)
+        if self.tool_budget_exhausted:
+            raise InvalidDiagnosisTransition("Tool budget exhausted")
+        if self._current_experiment is not None:
+            raise InvalidDiagnosisTransition("another Experiment is already active")
+        self._current_experiment = experiment
+        self._experiments = (*self._experiments, experiment)
+        self._used_tool_calls += 1
+        self.transition_to(DiagnosisStage.EXECUTING_TOOL)
+
+    def record_observation(self, result: ToolResult) -> Observation:
+        """Create an Observation only from the current successful Tool Result."""
+
+        if self._stage is not DiagnosisStage.EXECUTING_TOOL:
+            raise InvalidDiagnosisTransition(
+                "an Observation can only be recorded while executing_tool"
+            )
+        experiment = self._current_experiment
+        if experiment is None:
+            raise InvalidDiagnosisTransition(
+                "an Observation requires the current Experiment"
+            )
+        if result.status != "success":
+            raise InvalidDiagnosisTransition(
+                "an Observation requires a successful Tool Result"
+            )
+        if (
+            result.experiment_id != experiment.experiment_id
+            or result.hypothesis_id != experiment.hypothesis_id
+            or result.tool_name != experiment.tool_name
+        ):
+            raise InvalidDiagnosisTransition(
+                "Tool Result must belong to the current Experiment"
+            )
+        observation = Observation(
+            observation_id=f"O{len(self._observations) + 1}",
+            experiment_id=experiment.experiment_id,
+            hypothesis_id=experiment.hypothesis_id,
+            tool_result_ref=result.tool_result_id,
+            source=result.tool_name,
+            summary=(
+                f"{result.tool_name} completed"
+                + (" with truncated output" if result.truncated else "")
+            ),
+            artifact_ref=result.artifact_ref,
+            excerpt=result.output,
+        )
+        self.transition_to(DiagnosisStage.UPDATING_EVIDENCE)
+        self._observations = (*self._observations, observation)
+        return observation
+
+    def record_evidence(self, decision: UpdateEvidenceDecision) -> Evidence:
+        """Create qualitative Evidence linked to a registered Observation."""
+
+        if self._stage is not DiagnosisStage.UPDATING_EVIDENCE:
+            raise InvalidDiagnosisTransition(
+                "Evidence can only be recorded while updating_evidence"
+            )
+        active = self.active_hypothesis
+        if active is None:
+            raise InvalidDiagnosisTransition(
+                "Evidence update requires one Active Hypothesis"
+            )
+        if decision.hypothesis_id != active.hypothesis_id:
+            raise InvalidDiagnosisTransition(
+                "Evidence must belong to the Active Hypothesis"
+            )
+        observation = next(
+            (
+                item
+                for item in self._observations
+                if item.observation_id == decision.observation_ref
+            ),
+            None,
+        )
+        if observation is None:
+            raise InvalidDiagnosisTransition(
+                "Evidence references an unknown Observation"
+            )
+        experiment = self._current_experiment
+        if experiment is None or observation.experiment_id != experiment.experiment_id:
+            raise InvalidDiagnosisTransition(
+                "Evidence must reference the current Experiment Observation"
+            )
+        if observation.hypothesis_id != active.hypothesis_id:
+            raise InvalidDiagnosisTransition(
+                "Evidence Observation must belong to the Active Hypothesis"
+            )
+        evidence = Evidence(
+            evidence_id=f"E{len(self._evidence) + 1}",
+            hypothesis_id=active.hypothesis_id,
+            observation_ref=observation.observation_id,
+            provenance=f"{observation.source}:{observation.artifact_ref}",
+            direction=decision.direction,
+            explanation=decision.explanation,
+        )
+        self._evidence = (*self._evidence, evidence)
+        self._current_experiment = None
+        return evidence
+
     def apply_hypothesis_assessment(
         self,
         decision: HypothesisAssessmentDecision,
-        *,
-        evidence: list[Evidence],
     ) -> Hypothesis:
         """Map a validated model assessment onto a program-owned transition."""
 
+        if self._stage is not DiagnosisStage.UPDATING_EVIDENCE:
+            raise InvalidDiagnosisTransition(
+                "Hypothesis assessment is only allowed while updating_evidence"
+            )
         active = self.active_hypothesis
         if active is None:
             raise InvalidDiagnosisTransition(
                 "Hypothesis assessment requires one Active Hypothesis"
             )
-        evidence_by_id = {item.evidence_id: item for item in evidence}
+        evidence_by_id = {item.evidence_id: item for item in self._evidence}
         try:
             referenced = [evidence_by_id[item] for item in decision.evidence_refs]
         except KeyError as exc:
@@ -289,14 +457,15 @@ class DiagnosisStateMachine:
             target: HypothesisStatus = "rejected"
         elif decision.outcome == "sufficiently_supported":
             if not any(item.direction == "supporting" for item in referenced):
-                raise InvalidDiagnosisTransition(
-                    "support requires Supporting Evidence"
-                )
+                raise InvalidDiagnosisTransition("support requires Supporting Evidence")
             target = "supported"
         elif decision.outcome == "inconclusive":
             target = "inconclusive"
         else:
+            self.transition_to(DiagnosisStage.DIAGNOSING)
             if active.status == "testing":
                 return active
             target = "testing"
+            return self.transition_hypothesis(active.hypothesis_id, target)
+        self.transition_to(DiagnosisStage.DIAGNOSING)
         return self.transition_hypothesis(active.hypothesis_id, target)
