@@ -102,6 +102,10 @@ _Avoid_: 完整 Conversation History、Agent State、Raw Artifact 集合
 为审计而保存在 Diagnosis Run 目录中的完整模型响应、工具结果、代码、日志、补丁或 Validation 输出。
 _Avoid_: Working Context、结构化 Diagnosis State、长期记忆
 
+**Lightweight Code Search（轻量代码搜索）**:
+在 Faulty Commit 工作区内受控地查找代码内容或路径，用于产生带位置、片段和来源引用的 Observation。
+_Avoid_: Code RAG、Root Symbol Ground Truth、Evidence Score、任意 Shell 搜索
+
 ### 修复验证
 
 **Validation（验证）**:
@@ -143,7 +147,7 @@ _Avoid_: 固定工具流水线、无模型关键词搜索
 _Avoid_: 动态 Agent、Raw Model Baseline
 
 **Run Manifest（运行清单）**:
-不可变地记录一次 Diagnosis Run 的模型、prompt、索引、仓库、环境、预算和随机性配置的复现清单。
+不可变地记录一次 Diagnosis Run 的模型、prompt、仓库、工具配置、环境、预算和随机性配置的复现清单。
 _Avoid_: Root Cause 报告、运行事件流
 
 ### 运行结果

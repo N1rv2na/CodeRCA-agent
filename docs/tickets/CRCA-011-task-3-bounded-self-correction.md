@@ -6,11 +6,11 @@ P1
 
 ## Milestone
 
-M3 — Retrieval & Generalization Evidence
+M3 — Agent Self-Correction
 
 ## Background
 
-Task 1 和 Task 2 可以证明诊断闭环与 RAG，但未必证明 Agent 能纠正错误的初始诊断方向。Task 3 用一个对初始信息合理但错误的 H1，以及一个具有区分力的测试 Experiment，展示 Contradicting Evidence 如何结束 H1 并驱动 H2 Reformulation。
+Task 1 和 Task 2 可以证明诊断闭环与代码探索，但未必证明 Agent 能纠正错误的初始诊断方向。Task 3 用一个对初始信息合理但错误的 H1，以及一个具有区分力的测试 Experiment，展示 Contradicting Evidence 如何结束 H1 并驱动 H2 Reformulation。该能力在逻辑上不依赖任何特定检索算法。
 
 ## Goal
 
@@ -64,9 +64,14 @@ Task 3 在核心行为冻结后加入，避免把 Agent 针对任务手工调成
 
 ## Dependencies
 
+逻辑依赖：
+
 - CRCA-006 — 在最小 Docker 边界中运行测试 Experiment
 - CRCA-007 — 完成 Supported Hypothesis 补丁 Validation 闭环
-- CRCA-010 — 使用 Task 2 验证 RAG 诊断路径
+
+实施顺序：
+
+- CRCA-010 — 使用 Task 2 验证 Code Exploration 与 Root Cause Localization，作为冻结核心工具策略和复用任务验收 fixture 的顺序前置；它不是 Falsification 或 Bounded Reformulation 的逻辑依赖。
 
 ## Risks
 

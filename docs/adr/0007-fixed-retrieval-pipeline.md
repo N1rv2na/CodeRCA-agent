@@ -1,6 +1,6 @@
 # ADR-0007：两周 MVP 使用固定混合检索管线
 
-- 状态：Accepted
+- 状态：Superseded by ADR-0015
 - 日期：2026-08-06
 - 取代：ADR-0003
 

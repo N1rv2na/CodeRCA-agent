@@ -24,7 +24,7 @@ MVP 的目标不是证明 CodeRCA 在大规模数据集上优于其他系统，�
 1. 最小显式状态机与受约束 ReAct 的组合；
 2. 结构化 Tool Spec、权限、超时、错误与审计；
 3. 有界上下文和结构化 Agent 状态；
-4. Agent 可调用的代码 RAG；
+4. Agent 自主选择的 Lightweight Code Search 与可追溯代码 Observation；
 5. Docker 中的真实 Experiment 与 supported Hypothesis 补丁 Validation；
 6. 面向结果和轨迹的工程回归 Evaluation。
 
@@ -57,7 +57,7 @@ MVP 完成必须同时满足：
 ### 3.2 实现可扩展但不作保证
 
 - Task Manifest 使用通用 Schema，不在代码中硬编码三个任务 ID；
-- Python AST 索引器接收仓库路径和排除规则，不硬编码具体项目目录；
+- Lightweight Code Search 接收受约束的仓库路径、查询和结果上限，不硬编码具体任务目录；
 - ModelProvider 与具体推理服务隔离；
 - Tool Runtime 可以注册后续工具。
 
@@ -70,7 +70,7 @@ MVP 完成必须同时满足：
 - 多仓库、跨仓库和非 Python 诊断；
 - 生产 Trace、Metrics、告警和日志平台接入；
 - Raw Model Baseline、Fixed Pipeline 和大规模 Benchmark；
-- 四路检索消融、参数搜索和统计性 RAG 结论；
+- Python AST 分块、BM25、embedding、向量索引、混合融合、CPU reranker、检索消融和参数搜索；
 - LLM Judge、大规模隐藏集和重复稳定性实验；
 - 多个补丁并行生成与验证；
 - FastAPI、后台 Worker、Web UI 和静态 HTML 报告；
@@ -102,7 +102,7 @@ flowchart LR
     Agent --> Model[OpenAI-compatible ModelProvider]
     Agent --> Runtime[Tool Runtime]
     Runtime --> Diff[Git Diff]
-    Runtime --> Retrieval[Code RAG]
+    Runtime --> Search[Lightweight Code Search]
     Runtime --> Sandbox[Docker Sandbox]
     App --> Runs[Run Directory]
 ```
@@ -113,7 +113,7 @@ flowchart LR
 | Diagnosis | 管理 Active Hypothesis、Hypothesis History、Evidence、Experiment、Reformulation 与停止 | 直接执行命令或读取任意文件 |
 | Model | 通过 OpenAI-compatible Chat Completions 协议请求阶段决策 | 模型托管、厂商原生 SDK、路由和回退 |
 | Tool Runtime | Schema、权限、超时、错误和审计 | Root Cause 推理 |
-| Retrieval | 构建并查询固定代码索引 | 选择最终 Root Cause |
+| Code Search | 在 Faulty Commit 工作区执行有界文本与路径搜索 | 推断 AST Symbol、选择最终 Root Cause |
 | Sandbox | 在临时容器工作区运行注册命令和补丁 | 恶意代码与生产多租户防御 |
 | Reporting | 保存事件、报告、补丁和测试输出 | Web 展示和长期查询 |
 | Evaluation | 检查三个任务的 Outcome 和 Trajectory | Benchmark、Judge 和统计推断 |
@@ -296,46 +296,37 @@ API Key 只从进程环境读取，不写入 Task Manifest、运行目录、日�
 | 工具 | 职责 | 关键限制 |
 |---|---|---|
 | `inspect_diff` | 查看基础快照到 Faulty Commit 的变更 | 不暴露参考修复或未来代码 |
-| `search_code` | 执行固定混合代码检索 | Agent 不选择底层检索算法 |
+| `search_code` | 执行有界关键词、符号文本和路径搜索 | 不开放 Shell，不把匹配声明为 Root Symbol |
 | `read_code` | 读取指定文件和行区间 | 路径必须位于允许读取范围 |
 | `run_tests` | 在 Docker 中运行注册测试命令 | 不接受任意 Shell |
 | `apply_patch` | 在临时工作区应用候选补丁 | 只能修改允许的业务源码路径 |
 
-`search_code` 返回 Root Symbol、路径、行区间和 AST 元数据，因此不设置独立 `inspect_symbol`。语法和轻量静态检查作为注册 Validation 命令的一部分，不设置独立 `static_check`。
+`search_code` 返回仓库相对路径、行号或行区间、有界代码片段、截断状态和 Artifact 引用。轻量文本搜索不能可靠推断 AST Symbol，因此匹配结果不得自动成为 Root Symbol Ground Truth；最终 Root Symbol 由诊断过程结合 `read_code`、测试和其他 Evidence 确定。语法和轻量静态检查作为注册 Validation 命令的一部分，不设置独立 `static_check`。
 
-## 10. 代码 RAG
+## 10. Lightweight Code Search
 
-### 10.1 索引范围
+### 10.1 输入输出合同
 
-只索引冻结仓库的 Faulty Commit 代码，不索引修复后代码、参考补丁、答案性 commit message 或未来 commit。
+`search_code` 使用简单、明确且可复现的合同，不要求预处理索引。输入至少包含：
 
-索引器按 Python AST 提取函数、方法和类，记录：
+- 有界的非空字面量 `query`；
+- 显式 `search_kind`：`content` 或 `path`；
+- 可选的仓库相对搜索范围，且必须落在 Manifest `read_paths` 内；
+- 受程序上限约束的 `max_results` 与上下文行数。
 
-- 文件路径；
-- Root Symbol 或所属符号；
-- 父类；
-- 行区间；
-- 源码文本。
+内容搜索同时支持关键词以及函数、类、方法等符号名称的字面量匹配；路径搜索支持文件路径或文件名片段。每次成功执行返回规范化查询信息、`matched` 或 `no_matches` 状态、匹配文件的仓库相对路径、精确行号或行区间、有界代码片段、每项及总体截断状态，以及 Tool Result Artifact 引用。`no_matches` 是合法查询的成功结果，不等同于基础设施失败。
 
-过长符号可按固定窗口继续拆分并保留所属符号。仓库路径与排除规则由配置提供；MVP 只验证一个 Django 仓库。代码变化时整库重建，不实现增量索引和缓存迁移。
+完整 Tool Result 写入 Run Artifact；Observation 只保存结果摘要、有界片段和来源引用。Evidence 再解释搜索结果与 Active Hypothesis 的关系。匹配顺序、数量或文本相关性不是 Evidence Score，也不参与 Hypothesis Ranking。
 
-### 10.2 固定检索管线
+### 10.2 执行、安全与版本边界
 
-运行时只有一条检索管线：
+MVP 优先使用成熟的 ripgrep 实现内容搜索，并以仓库相对文件枚举加确定性字面量过滤实现路径搜索。Tool Runtime 使用参数数组启动进程，不拼接 Shell；内容查询默认采用 fixed-string 语义。ripgrep 退出码 0 表示命中，1 表示合法 `no_matches`，超时分类为 `timeout`，其他执行异常分类为 `execution_failed`。参数和范围校验继续使用 `invalid_arguments` 与 `permission_denied`。
 
-```text
-BM25 召回 + 向量召回
-          ↓
-       固定融合
-          ↓
-      CPU reranker
-          ↓
-       Top-K 结果
-```
+搜索只作用于 Task Manifest 指定 Faulty Commit 的已准备工作区。程序在执行前规范化工作区根目录、搜索范围和 `read_paths`，禁止路径穿越，不跟随符号链接，不读取仓库外文件；Ground Truth、参考补丁、修复后代码和未来 commit 不得出现在该工作区或搜索范围。查询长度、搜索范围、结果数量、上下文行数、单片段长度和总输出长度均使用固定上限。
 
-embedding 在索引阶段预计算。BM25、向量搜索和 CPU reranker 在本机运行，不依赖诊断模型的计算资源。融合方法、候选数和 Top-K 在实现前冻结，不暴露给 Agent，也不做消融或在线调参。
+Agent 根据当前 Active Hypothesis 自主选择是否调用 `search_code`；状态机不强制形成 Hypothesis 后固定调用搜索。调用必须携带 Experiment 目的、预期 Observation 和 falsification relevance，并计入 Tool Budget。搜索负责发现候选位置，不判断 Hypothesis 是否正确。
 
-查询信号来自异常类型、错误消息、堆栈、失败测试、diff 符号以及当前 Hypothesis 生成的语义查询。动态查询必须关联对应 Hypothesis。
+Python AST 分块、BM25、embedding、向量数据库或索引、dense retrieval、融合、CPU reranker、检索缓存、Provider/插件框架和 Retrieval Evaluation 均不属于 CodeRCA MVP。
 
 ## 11. Docker Experiment 与补丁 Validation
 
@@ -390,12 +381,12 @@ CLI 支持：
 
 ## 13. 三个冻结任务
 
-三个任务共享同一个基础仓库、Docker 镜像和索引流程，但拥有不同 Faulty Commit、CI 日志和注册测试入口：
+三个任务共享同一个基础仓库、Docker 镜像和五工具合同，但拥有不同 Faulty Commit、CI 日志和注册测试入口：
 
 | 任务 | 设计目的 | 必要诊断行为 |
 |---|---|---|
 | Task 1 | 变更证据 | 主要通过 diff 与代码阅读定位 Root Cause |
-| Task 2 | RAG 证据 | Root Symbol 不由堆栈直接命中，需要混合检索 |
+| Task 2 | 代码探索证据 | Root Symbol 不由初始失败信息直接暴露，Agent 利用自主搜索和代码阅读定位 |
 | Task 3 | Self-Correction 证据 | 初始 H1 错误，通过测试 Observation 否定 H1 并 Reformulate H2 |
 
 Task 1 用于开发和必要时的现场运行；Task 2 用于工作流回归；Task 3 在核心 Prompt、Schema 和工具策略基本冻结后运行，作为有限的未见故障检查。三个任务均为人工注入的业务逻辑回归，不寻找真实历史修复 commit。
@@ -418,6 +409,7 @@ Evaluation Harness 调用 Diagnosis Application Service，并输出逐任务检�
 - 工具调用是否绑定有效 Hypothesis；
 - 是否声明目的与预期 Observation；
 - 是否至少产生一条可追溯 Evidence；
+- Task 2 是否使用真实搜索 Observation 推进诊断，而不是把搜索算法或固定工具顺序作为验收目标；
 - Supporting 和 Contradicting 方向是否合法；
 - 是否遵守八次工具预算；
 - 是否产生合法停止原因；
@@ -453,7 +445,7 @@ Evaluation 不调用 LLM Judge，不与 Baseline 比较，不汇总具有泛化�
 
 ### 15.3 集成测试
 
-- AST 分块、索引构建和固定检索管线；
+- Lightweight Code Search 的命中、零结果、参数/权限错误、超时、执行失败、结果截断和 provenance；
 - Docker 临时工作区；
 - 注册测试命令；
 - 补丁应用与 Validation；
@@ -470,23 +462,23 @@ Evaluation 不调用 LLM Judge，不与 Baseline 比较，不汇总具有泛化�
 1. 一个 Task Manifest 与 FakeModelProvider 纵向骨架；
 2. 冻结 django-waffle Task 1 的 Manifest、Faulty Commit、注册命令、CI artifact 与 Evaluation Ground Truth；
 3. OpenAI-compatible 模型兼容性门禁；
-4. 最小状态机、阶段 Schema 和五工具运行时；
-5. Task 1 的真实模型、真实工具和 Docker Validation 闭环；
-6. 固定 RAG 管线与 Task 2；
+4. 单 Active Hypothesis、H1～H3 History 与 decision-specific ContextBuilder；
+5. `inspect_diff`/`read_code` 诊断循环、Docker `run_tests` 和 Task 1 补丁 Validation 闭环；
+6. Lightweight Code Search 与 Task 2 代码探索验收；
 7. bounded self-correction 与 Task 3；
 8. Engineering Evaluation、测试、文档和运行产物。
 
-前三项已经分别由 CRCA-001、CRCA-002 和 CRCA-003 落地。后续实现继续按 Ticket 依赖推进；这里的顺序描述实际纵向切片，不改变最终 MVP 的完成条件。
+前四项已经分别由 CRCA-001～CRCA-004 落地，但 CRCA-004 只把初始 H1 Formation 接入 Application Service；完整 Agent Loop 和 Tool Runtime 仍由后续 Ticket 实现。后续实现继续按 Ticket 依赖推进；这里的顺序描述实际纵向切片，不改变最终 MVP 的完成条件。
 
 完整实现不能先于第一个真实纵向闭环。局部组件通过测试但没有真实 Diagnosis Run，不视为 MVP 完成。
 
 ### 16.2 第七天降级规则
 
-如果第七天仍未跑通真实纵向闭环，依次：
+Lightweight Code Search 已经是检索范围的最小实现，不再保留“先删除 reranker”的组件降级。如果第七天仍未跑通 Task 1 真实纵向闭环：
 
-1. 删除 reranker，保留 BM25 与向量混合；
-2. 将冻结任务从三个减少为两个；
-3. 将冻结任务从两个进一步减少为只保留 Task 1 的完整闭环。
+1. 暂停 Task 2/Task 3 工作，先完成 Task 1 的 Agent Loop、Docker Experiment 和 Patch Validation；
+2. Task 1 闭环后再实现 Lightweight Code Search 与 Task 2；`search_code` 不是 Task 1 的前置条件；
+3. 若总交付周期仍不足，延期 Task 3，但不削弱 Single Active Hypothesis、Falsification 或 Bounded Reformulation 的实现合同。
 
 不得削减：最小状态机、单 Active Hypothesis 不变量、五工具协议、已配置的真实云端模型、一个 Docker Experiment 和 supported Hypothesis 补丁 Validation。
 
@@ -496,7 +488,7 @@ Evaluation 不调用 LLM Judge，不与 Baseline 比较，不汇总具有泛化�
 |---|---|---|
 | 已配置模式无法稳定产生本地 Schema 有效输出 | Agent 无法真实闭环 | 早期按 mode 运行兼容性门禁；优先 native schema；阶段小 Schema；本地 Pydantic 校验 |
 | 三个任务仍过度定制 | 招聘证据被质疑 | 三种不同必要路径；Task 3 延后运行；公开逐任务轨迹 |
-| 固定 RAG 管线环境复杂 | 首个闭环延期 | Task 1 可先用最小搜索接缝；第七天先删除 reranker |
+| Lightweight Search 查询与代码词汇不一致 | Task 2 找不到关键位置 | Task 2 保留可由文本/路径线索发现的真实路径；结合 diff、搜索与 `read_code`，不宣称语义检索能力 |
 | Docker 在 WSL/开发机行为不一致 | Validation 不稳定 | 单镜像、单仓库、注册命令和统一超时 |
 | 已配置模型输出不可应用补丁 | 核心验证失败 | 早期补丁探针；只允许一个 supported Hypothesis 的小型补丁 |
 | Scope 再次膨胀 | 两周无法交付 | 延期列表和不可削减核心作为变更门禁 |
@@ -505,7 +497,7 @@ Evaluation 不调用 LLM Judge，不与 Baseline 比较，不汇总具有泛化�
 
 - [ADR-0014：单 Active Hypothesis 与按决策重建上下文](adr/0014-single-active-hypothesis-reconstructed-context.md)，取代 ADR-0001
 - [ADR-0002：结构化 Tool Runtime 且不实现 MCP](adr/0002-typed-tool-runtime.md)
-- [ADR-0007：固定混合检索管线](adr/0007-fixed-retrieval-pipeline.md)，取代 ADR-0003
+- [ADR-0015：Lightweight Code Search](adr/0015-lightweight-code-search.md)，取代 ADR-0007
 - [ADR-0008：按运行目录持久化](adr/0008-run-directory-persistence.md)，取代 ADR-0005
 - [ADR-0013：本地 Schema 校验与显式 Structured Output Mode](adr/0013-local-schema-validation-structured-output-modes.md)，取代 ADR-0012
 - [ADR-0010：最小 Docker 执行边界](adr/0010-minimal-docker-execution-boundary.md)，取代 ADR-0004

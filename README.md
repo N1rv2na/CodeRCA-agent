@@ -2,7 +2,7 @@
 
 CodeRCA 是一个面向单仓库 CI 测试失败的根因分析 Agent 原型。它在任意时刻只维护一个 Active Hypothesis，通过真实 Experiment、Observation 和 Evidence 主动尝试证伪；当前假设结束后，最多基于累积诊断知识形成 H2/H3。
 
-项目用于展示 AI Agent 开发中的工作流编排、工具系统、上下文工程、代码 RAG、受控执行和工程 Evaluation，而不是构建生产级故障平台或研究级 Benchmark。
+项目用于展示 AI Agent 开发中的工作流编排、工具系统、上下文工程、受控代码探索、执行验证和工程 Evaluation，而不是构建生产级故障平台、完整代码 RAG 或研究级 Benchmark。
 
 ## 核心闭环
 
@@ -28,7 +28,7 @@ Agent 首先只形成 H1。H1 Schema 不接受 Evidence Basis；H2/H3 只能引�
 - **Agent 工作流**：最小显式状态机控制生命周期，在诊断循环内部使用受约束 ReAct；
 - **Tool Runtime**：统一 Tool Spec 管理输入输出 Schema、权限、超时、错误和审计，MVP 固定五个诊断工具；
 - **Context Engineering**：根据当前 Decision，从结构化 Diagnosis State、相关 Evidence、选定历史 Observation 和最新 Observation 重建 Working Context，不重放完整 Conversation History；
-- **代码 RAG**：Python AST 语义分块，结合 BM25、向量召回、固定融合和 CPU reranker；
+- **Lightweight Code Search**：Agent 可按当前 Active Hypothesis 自主调用受控 `search_code`，通过可复现的关键词、符号文本与路径搜索获得可追溯代码 Observation；
 - **实验与评测**：在最小 Docker 执行边界中运行测试和补丁，通过 Outcome Evaluation 与 Trajectory Evaluation 检查结果和 Agent 行为。
 
 ## MVP 范围
@@ -38,16 +38,16 @@ Agent 首先只形成 H1。H1 Schema 不接受 Evidence Basis；H2/H3 只能引�
 - 一个冻结的开源 Django 仓库；
 - 由已知代码变更导致的业务逻辑回归；
 - 同仓库、同镜像和注册命令集合下的新 Diagnosis Task；
-- 三个分别强调 diff/代码、RAG 和测试 Experiment 的冻结任务；
+- 三个分别强调 diff/代码、代码探索定位和测试 Experiment 的冻结任务；
 - 一个由操作者配置的 OpenAI-compatible 云端模型、本机 CLI 和串行 Diagnosis Run。
 
-以下能力延期：API 契约变化、配置错误、任意仓库兼容、完整检索消融、Baseline、LLM Judge、大规模隐藏集、FastAPI、Web UI、SQLite、本地模型后端、原生厂商 SDK、多模型路由或回退、MCP 和生产级沙箱。
+以下能力延期：API 契约变化、配置错误、任意仓库兼容、AST 代码分块、BM25/向量混合检索、CPU reranker、检索消融、Baseline、LLM Judge、大规模隐藏集、FastAPI、Web UI、SQLite、本地模型后端、原生厂商 SDK、多模型路由或回退、MCP 和生产级沙箱。
 
 三个冻结任务只用于证明原型闭环和工程回归，不用于声称统计显著性或跨仓库泛化能力。
 
 ## 项目状态
 
-项目已完成 MVP Scope Reduction、领域建模与架构设计，当前处于实现阶段。CRCA-001 已提供 Manifest-to-Run walking skeleton，CRCA-002 已冻结 django-waffle Task 1，CRCA-003 已提供通用 OpenAI-compatible ModelProvider 与 Model Compatibility Gate，CRCA-004 已实现受约束的初始 Hypothesis 形成；后续 Tool Runtime、RAG、Docker Validation 和 Evaluation Harness 仍在规划中。
+项目已完成 MVP Scope Reduction、领域建模与架构设计，当前处于实现阶段。CRCA-001 已提供 Manifest-to-Run walking skeleton，CRCA-002 已冻结 django-waffle Task 1，CRCA-003 已提供通用 OpenAI-compatible ModelProvider 与 Model Compatibility Gate，CRCA-004 已实现受约束的初始 Hypothesis 形成和 decision-specific ContextBuilder；后续完整 Agent Loop、Tool Runtime、Lightweight Code Search、Docker Validation 和 Evaluation Harness 仍在规划中。
 
 - [Implementation specification issue](https://github.com/N1rv2na/CodeRCA-agent/issues/1)
 - 目标交付方式：源码安装 + OpenAI-compatible 云端模型 API + 固定 Docker 镜像 + CLI

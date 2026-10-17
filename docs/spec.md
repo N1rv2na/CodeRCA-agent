@@ -2,7 +2,7 @@
 
 | 属性 | 内容 |
 |---|---|
-| 状态 | Implementation in progress（CRCA-001～003 已落地） |
+| 状态 | Implementation in progress（CRCA-001～004 已落地） |
 | 日期 | 2026-08-06 |
 | 权威设计 | [CodeRCA 两周 MVP 设计](design.md) |
 | 产品范围 | 一个冻结 Django 仓库中的业务逻辑回归 |
@@ -13,15 +13,15 @@
 
 后端工程师面对由已知代码变更引起的 CI 测试失败时，需要在失败日志、Git diff、相关代码和测试行为之间反复切换，才能定位真正的 Root Cause。单次模型回答容易把失败表象当成根因，也无法持续维护可证伪的 Hypothesis、通过 Experiment 收集 Supporting Evidence 与 Contradicting Evidence，或用真实 Validation 检查修复建议。
 
-对项目作者而言，目标是在两周内完成一个可真实运行、可检查的 AI Agent 求职原型，而不是构建研究级 Benchmark 或通用故障平台。MVP 必须把有限开发时间集中在显式 Agent 工作流、结构化 Tool Runtime、有界上下文、代码 RAG 和 Docker Experiment 上，同时通过小规模工程 Evaluation 防止核心行为回归。
+对项目作者而言，目标是在两周内完成一个可真实运行、可检查的 AI Agent 求职原型，而不是构建研究级 Benchmark、完整代码 RAG 或通用故障平台。MVP 必须把有限开发时间集中在显式 Agent 工作流、结构化 Tool Runtime、decision-specific Context Engineering、Lightweight Code Search 和 Docker Experiment 上，同时通过小规模工程 Evaluation 防止核心行为回归。
 
 ## Solution
 
 CodeRCA 提供一个本机 CLI。用户提交符合 Schema 的 Task Manifest，描述同一冻结 Django 仓库中的 Faulty Commit、CI 日志、注册测试命令、Docker 镜像和执行边界。Diagnosis Application Service 创建 Diagnosis Run，并由最小显式状态机控制生命周期；诊断循环内部使用受约束 ReAct，让操作者配置的 OpenAI-compatible 云端模型一次提出和检验一个 Active Hypothesis、选择 falsification-oriented Experiment、解释 Observation 和更新 Evidence。
 
-Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运行测试和应用补丁。代码检索使用固定的 Python AST 分块、BM25/向量混合和 CPU reranker 管线。每个工具调用必须关联当前 Active Hypothesis、调用目的、预期 Observation 和证伪关联。程序负责 Schema、稳定 ID、状态、权限、超时、Hypothesis/Tool Budget 和停止条件；Evidence 不计算数值 Score。
+Agent 通过五个结构化工具检查 diff、搜索代码、读取源码、运行测试和应用补丁。`search_code` 在 Faulty Commit 工作区执行有界、可复现的字面量内容/符号文本与路径搜索，不要求预处理索引。每个工具调用必须关联当前 Active Hypothesis、调用目的、预期 Observation 和证伪关联。程序负责 Schema、稳定 ID、状态、权限、超时、Hypothesis/Tool Budget 和停止条件；Evidence 不计算数值 Score。
 
-诊断完成后，系统只为最终 supported Hypothesis 生成一个候选补丁，并在最小 Docker 执行边界中运行注册 Validation。CLI 输出实时摘要，完整事件、模型响应、工具结果、补丁和 Root Cause Report 保存到独立运行目录。三个冻结任务分别验证 diff/代码证据、RAG 证据和错误 H1 的 bounded self-correction；Evaluation Harness 只进行确定性的 Outcome Evaluation 与 Trajectory Evaluation，不产生统计性泛化结论。
+诊断完成后，系统只为最终 supported Hypothesis 生成一个候选补丁，并在最小 Docker 执行边界中运行注册 Validation。CLI 输出实时摘要，完整事件、模型响应、工具结果、补丁和 Root Cause Report 保存到独立运行目录。三个冻结任务分别验证 diff/代码证据、自主代码探索定位和错误 H1 的 bounded self-correction；Evaluation Harness 只进行确定性的 Outcome Evaluation 与 Trajectory Evaluation，不产生统计性泛化结论。
 
 ## User Stories
 
@@ -56,8 +56,8 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 24. 作为技术评审者，我希望每个工具共享 Tool Spec 契约，从而检查 Schema、权限、超时、错误和审计设计。
 25. 作为技术评审者，我希望模型只负责提出决策而程序维护不变量，从而理解系统如何约束外部模型。
 26. 作为技术评审者，我希望查看按 Decision 重建的 Working Context，从而评估系统是否选择相关状态而不是无限追加完整历史。
-27. 作为技术评审者，我希望 `search_code` 返回 AST 符号元数据和排序结果，从而检查代码 RAG 如何支持 Root Cause 定位。
-28. 作为技术评审者，我希望检索实现明确采用固定混合管线，从而不会把未经评测的配置选择描述为可量化增益。
+27. 作为技术评审者，我希望 `search_code` 返回查询、仓库相对路径、精确行区间、有界片段、截断状态和 Artifact 引用，从而检查代码探索是否可追溯。
+28. 作为技术评审者，我希望搜索匹配不会被自动声明为 Root Symbol、Evidence Score 或 Hypothesis Ranking，从而区分信息发现与诊断判断。
 29. 作为技术评审者，我希望看到 Docker 中真实运行的测试与补丁结果，从而确认 Experiment 不只是模拟响应。
 30. 作为技术评审者，我希望看到逐任务 Outcome Evaluation 与 Trajectory Evaluation，从而判断 Agent 修改后是否发生行为回归。
 31. 作为技术评审者，我希望项目公开失败任务和停止原因，从而避免只展示成功路径。
@@ -82,19 +82,19 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 47. 作为项目开发者，我希望 ModelProvider 只依赖 OpenAI-compatible Chat Completions 协议，从而不把厂商 SDK、模型托管、路由或回退耦合进 Agent 核心。
 48. 作为项目开发者，我希望显式运行通用 Model Compatibility Gate 验证已配置模型的 Schema、工具参数、Evidence 更新和补丁能力，从而降低末期集成风险。
 49. 作为项目开发者，我希望每次运行只接受一个由环境变量配置的端点和模型，从而避免模型发现、自动选择和多后端状态复杂度。
-50. 作为项目开发者，我希望 embedding 在索引阶段预计算且 reranker 在 CPU 运行，从而让本地检索与云端诊断模型相互隔离。
-51. 作为项目开发者，我希望索引器按函数、方法和类建立 AST 语义块，从而保留代码结构和 Root Symbol 元数据。
-52. 作为项目开发者，我希望源码变化时整库重建索引，从而避免实现增量索引和缓存迁移。
+50. 作为项目开发者，我希望 `search_code` 使用成熟的本地搜索工具且不要求预处理索引，从而降低依赖和调试成本。
+51. 作为项目开发者，我希望合法零结果与参数错误、权限拒绝、超时和执行失败明确区分，从而让 Agent 正确解释 Observation。
+52. 作为项目开发者，我希望搜索结果有固定数量和长度上限并保留完整 Artifact 引用，从而兼顾上下文边界与审计。
 53. 作为项目开发者，我希望每次模型调用从结构化状态重新组装上下文，从而避免 Prompt 随历史无限增长。
 54. 作为项目开发者，我希望大日志和测试输出只通过运行文件引用，从而让模型上下文保持有界。
 
 ### Diagnosis Task 维护者
 
-55. 作为任务维护者，我希望三个冻结任务共享仓库、Docker 镜像和索引流程，从而降低环境维护成本。
+55. 作为任务维护者，我希望三个冻结任务共享仓库、Docker 镜像和五工具合同，从而降低环境维护成本。
 56. 作为任务维护者，我希望每个任务拥有独立 Faulty Commit、CI 日志和注册测试入口，从而保持故障可复现。
 57. 作为任务维护者，我希望 Agent 输入与 Root Symbol、参考修复和 Evaluation 答案分离，从而避免答案泄漏。
 58. 作为任务维护者，我希望 Task 1 主要需要 diff 和代码阅读，从而验证变更证据路径。
-59. 作为任务维护者，我希望 Task 2 的 Root Symbol 不能从堆栈直接读取，从而验证混合代码检索路径。
+59. 作为任务维护者，我希望 Task 2 的 Root Symbol 不能从初始失败信息直接读取，从而验证 Agent 会利用真实搜索与代码 Observation 自主定位根因。
 60. 作为任务维护者，我希望 Task 3 的初始 H1 可以被真实测试 Observation 否定，随后 H2 利用新证据命中 Root Cause，从而验证 bounded self-correction。
 61. 作为任务维护者，我希望 Task 3 在核心 Prompt、Schema 和工具策略基本冻结后运行，从而提供有限的未见故障检查。
 62. 作为任务维护者，我希望每个任务标注 Root Symbol、触发条件、故障机制、失败表现和参考修复行为，从而支持确定性 Evaluation 与人工核查。
@@ -139,17 +139,17 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 19. **工具错误**：统一错误至少包括 invalid arguments、permission denied、timeout 和 execution failed；工具默认不自动重试。
 20. **工具审计**：调用事件记录 Hypothesis、目的、预期 Observation、参数摘要、耗时、状态和结果引用，不记录或要求私有思维链。
 21. **冻结工具集**：MVP 只有 `inspect_diff`、`search_code`、`read_code`、`run_tests` 和 `apply_patch` 五个工具，不实现 MCP 或任意 Shell。
-22. **工具合并**：符号信息由 `search_code` 返回的 AST 元数据承载，不实现独立符号分析工具；语法和轻量静态检查并入注册 Validation。
+22. **工具合并**：`search_code` 可按函数、类或方法名称做字面量搜索，但不推断 AST Symbol；最终 Root Symbol 由诊断过程结合代码 Evidence 确定。MVP 不实现独立符号分析工具，语法和轻量静态检查并入注册 Validation。
 23. **路径权限**：只读工具只能访问 Manifest 允许的仓库范围；补丁只能修改允许的业务源码，不能修改测试、依赖锁、任务定义或 Evaluation 数据。
 24. **Working Context**：每次 Model Decision 根据 Decision Type，从 Task Context、结构化 Diagnosis State、相关 Evidence、选定历史 Observation 和 Latest Observation 确定性重建 Context。Form H1、Select Experiment、Update Evidence、Assess Hypothesis、Reformulate 和 Validation 使用不同固定视图。
 25. **上下文外数据**：完整日志、代码、Tool Result、测试输出和模型响应保存为 Run Artifact；MVP 不实现自动摘要、语义/长期记忆、按需 Artifact 召回或完整 Conversation History replay。
 26. **ModelProvider**：只实现一个 OpenAI-compatible HTTP ModelProvider。每次进程运行通过 `CODERCA_MODEL_BASE_URL`、`CODERCA_MODEL_ID`、`CODERCA_MODEL_API_KEY` 和 `CODERCA_MODEL_STRUCTURED_OUTPUT_MODE` 配置一个 Chat Completions 端点、模型和显式 Structured Output Mode；可选 `CODERCA_MODEL_REQUEST_EXTENSIONS` 必须是 JSON object，缺失或空值视为 `{}`。请求必须非流式、`temperature=0`；`native_json_schema` 使用 Provider 原生 strict JSON Schema，`json_text` 不发送 `response_format`。Request Extensions 只能在标准 payload 构造后附加，不得覆盖 `model`、`messages`、`stream`、`temperature` 或 `response_format`，也不得按 Endpoint、Model ID 或品牌推断。两种模式都必须直接解析 `message.content` 并通过本地 Pydantic 校验，不做 fence/thinking 清理、子串提取、字段猜测或模糊修复。
 27. **Model Compatibility Gate**：显式命令在当前 Structured Output Mode 下最多执行一次预检和四个相同的一次性能力探针，覆盖阶段 Schema、合法工具参数、Evidence 更新和可应用的小型 Python 补丁，输出记录 mode 的脱敏 Model Compatibility Report。它 fail-fast，是建议性兼容检查，不授权或阻止 Diagnosis Run，也不自动探测或切换 mode。
-28. **计算边界**：诊断模型由云端 API 托管。代码 embedding 在索引阶段预计算，reranker 在本机 CPU 上执行小候选集重排；MVP 不管理诊断模型 GPU、量化或加载。
-29. **RAG 索引**：只索引 Faulty Commit 快照。以 Python AST 函数、方法和类为主要语义单元，保存路径、符号、父类、行区间和源码。
-30. **索引更新**：仓库路径和排除规则由配置提供；源码变化时整库重建，不实现增量索引、缓存迁移或任意仓库质量保证。
-31. **固定检索管线**：`search_code` 使用 BM25 与向量召回、固定融合、CPU reranker 和固定 Top-K。Agent 不选择算法，MVP 不实现消融、参数搜索或在线调参。
-32. **检索查询**：查询可以使用异常类型、消息、堆栈、失败测试、diff 符号和 Hypothesis 语义描述；动态查询必须关联对应 Hypothesis。
+28. **计算边界**：诊断模型由云端 API 托管。Lightweight Code Search 使用宿主进程中的成熟本地搜索工具，不加载 embedding 或 reranker；MVP 不管理诊断模型 GPU、量化或加载。
+29. **搜索范围**：`search_code` 只访问 Task Manifest 指定 Faulty Commit 的准备工作区及 `read_paths`。路径必须规范化为仓库内相对路径，不跟随符号链接，也不读取 Ground Truth、参考补丁、修复后代码或未来 commit。
+30. **搜索输入**：最小输入包含有界非空 `query`、显式 `search_kind`（`content` 或 `path`）、可选受限路径范围、`max_results` 和上下文行数。内容/符号搜索使用 fixed-string 语义；执行使用参数数组，不开放任意 Shell。
+31. **搜索结果**：成功结果区分 `matched` 与 `no_matches`，并包含规范化查询、仓库相对路径、精确行号或行区间、有界片段、截断状态和 Artifact 引用。零结果不是工具失败；匹配结果不自动成为 Root Symbol Ground Truth、Evidence Score 或 Hypothesis Ranking。
+32. **搜索执行**：优先使用 ripgrep；退出码 0 为命中、1 为合法零结果，超时和其他执行异常分别映射 `timeout` 与 `execution_failed`。查询长度、结果数量、上下文行数、片段和总输出均有固定上限。Agent 自主决定是否搜索，程序不硬编码固定工具序列。
 33. **Docker 边界**：MVP 使用一个预构建 Django 镜像和临时工作区，默认禁网，只执行注册命令，设置统一超时且不挂载 `CODERCA_MODEL_API_KEY`；云端模型请求只由宿主 Agent 进程发起。
 34. **安全声明**：Docker 边界只降低正常测试的意外副作用，不承诺生产级沙箱、恶意代码防御、容器逃逸防护或跨平台一致性。
 35. **Validation 流程**：supported Hypothesis 的补丁通过路径校验后应用到临时工作区，再运行注册测试与轻量静态检查；结果成为 Evidence 和报告字段。
@@ -157,11 +157,11 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 37. **持久化边界**：大文本使用普通文件引用；不实现 SQLite、内容寻址、跨运行去重、数据库迁移、崩溃恢复或回放。
 38. **CLI**：CLI 负责读取 Manifest、启动 Diagnosis Run、显示关键状态与事件、输出最终报告和运行目录；不提供交互式任务创建、后台执行、HTTP API 或并发。
 39. **Root Cause Report**：报告包含最终 supported Hypothesis、H1～H3 History、位置与 Root Symbol、因果字段、支持/反对 Evidence、修复建议、补丁、Validation 和停止原因。
-40. **冻结任务**：三个任务共享仓库、镜像和索引流程，但分别强制使用 diff/代码、RAG 和测试 Experiment 证据路径。Task 3 在 Prompt、Schema 和工具策略基本冻结后运行。
+40. **冻结任务**：三个任务共享仓库、镜像和五工具合同，分别验证 diff/代码 Evidence、Agent 自主代码探索定位和测试 Experiment 自我纠错。Task 2 要求搜索 Observation 对定位有实际贡献，但不强制固定工具顺序；Task 3 在 Prompt、Schema 和工具策略基本冻结后运行。
 41. **Evaluation**：Outcome Evaluation 检查最终 Root Symbol、补丁可应用性、Validation 和报告契约；Trajectory Evaluation 检查 single-active、append-only History、Experiment 绑定、Evidence 引用、reject-before-reformulate、H1～H3 Budget、停止和 supported-H patch 不变量。
 42. **结果表达**：Evaluation 输出逐任务结果，不调用 LLM Judge，不与 Baseline 比较，不汇总具有统计或泛化暗示的成功率；因果机制由作者人工核查。
 43. **交付方式**：MVP 通过源码、本地 Python 环境、操作者配置的 OpenAI-compatible 云端模型 API、一个 Docker 镜像和 CLI 交付，不发布 PyPI、Compose 或托管服务。
-44. **第七天降级**：如果第七天仍未完成真实纵向闭环，依次删除 reranker、将任务从三个减少到两个，再减少为只保留 Task 1；不得恢复多候选 Ranking 简化实现。
+44. **第七天优先级**：Lightweight Code Search 已是最小搜索实现，不设置组件降级。如果第七天仍未完成 Task 1 真实纵向闭环，暂停 Task 2/Task 3 并优先完成 Agent Loop、Docker Experiment 和 Patch Validation；Task 1 不依赖 `search_code`。Task 1 完成后实现 Search/Task 2，Task 3 最后交付且可在总周期不足时延期。
 45. **不可削减核心**：最小状态机、single-active 不变量、五工具协议、已配置的真实云端模型、一个 Docker Experiment 和 supported-Hypothesis 补丁 Validation 不得因进度被替换为模拟实现。
 
 ## Testing Decisions
@@ -181,9 +181,9 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 13. **统一工具契约测试**：五个工具执行同一套输入输出 Schema、权限、超时、错误、审计和结果上限测试。
 14. **工具安全测试**：验证路径穿越、仓库外读取、禁止源码修改、测试修改、依赖锁修改、未知测试命令和任意 Shell 均被拒绝。
 15. **工具错误测试**：分别注入非法参数、权限拒绝、超时和执行失败，验证事件与 Diagnosis Run 保留正确分类且默认不重试。
-16. **RAG 分块测试**：验证函数、方法和类的 AST 语义块保留路径、符号、父类和行区间，超长分窗仍保留所属符号。
-17. **RAG 集成测试**：在冻结代码快照上执行 BM25、向量融合和 CPU reranker，验证结果具有稳定 Schema、可追溯代码位置且不访问修复后代码。
-18. **索引重建测试**：验证快照变化触发整库重建，旧索引不会被错误用于新的 Faulty Commit。
+16. **搜索合同测试**：验证内容/符号文本与路径查询、`matched`/`no_matches`、精确行区间、有界片段、截断状态和 Artifact provenance。
+17. **搜索安全测试**：验证 Faulty Commit 工作区、Manifest `read_paths`、路径穿越、符号链接逃逸、Ground Truth/参考补丁隔离、查询/结果上限和无 Shell 执行。
+18. **搜索错误测试**：分别验证非法参数、权限拒绝、ripgrep 合法零结果、超时和执行失败，确保 Observation 与错误分类不会混淆。
 19. **Docker 集成测试**：验证临时工作区、默认禁网、注册命令、统一超时和 `CODERCA_MODEL_API_KEY` 不挂载；不把未承诺的生产安全能力写成验收条件。
 20. **补丁测试**：验证只允许 supported Hypothesis 进入补丁阶段，补丁只能修改允许源码，Validation 后停止且不会启动第二轮补丁搜索。
 21. **运行记录测试**：验证 Manifest 快照、JSONL 事件、JSON 报告、模型响应、工具输出、补丁和 Validation 结果均写入独立运行目录。
@@ -201,7 +201,7 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 - 任意 Python/Django 仓库、多仓库、跨仓库和非 Python 诊断保证；
 - 生产 Trace、Metrics、告警、日志平台和网络查询；
 - Raw Model Baseline、Fixed Pipeline、大规模 Benchmark 和统计显著性结论；
-- BM25、向量、混合与 reranker 的多配置消融、参数搜索和在线调参；
+- 为检索服务的 Python AST chunking、BM25、embedding、向量数据库/索引、dense retrieval、混合融合、CPU reranker、检索缓存、Provider/插件框架、消融、参数搜索和在线调参；
 - LLM Judge、大规模隐藏集、稳定性重复实验和 Judge 一致率研究；
 - 完整 Hidden Validation、自动语义防投机和多个补丁并行验证；
 - 并行 Active Hypothesis、H4、替换历史或重新激活 rejected Hypothesis；
@@ -219,8 +219,8 @@ Agent 通过五个结构化工具检查 diff、检索代码、读取源码、运
 ## Further Notes
 
 - 实现、测试、事件和报告必须使用 `CONTEXT.md` 中的 Diagnosis Task、Task Manifest、Diagnosis Run、Root Cause、Root Symbol、Hypothesis、Active Hypothesis、Hypothesis History、Evidence、Experiment、Observation、Working Context、Run Artifact、Validation、Outcome Evaluation 和 Trajectory Evaluation 等规范术语。
-- 当前有效 ADR 为单 Active Hypothesis 与按决策重建上下文、结构化 Tool Runtime、固定混合检索管线、按运行目录持久化、使用本地 Schema 校验与显式 Structured Output Mode 的单一 OpenAI-compatible 云端 ModelProvider，以及最小 Docker 执行边界。旧的多候选状态机、检索消融、SQLite、模型兜底、原生 strict Schema 通用最低要求和完整容器控制 ADR 已被取代。
-- Task 1 已冻结为 django-waffle v5.0.0 基础快照及其人工注入 Faulty Commit；Task 2、Task 3、运行时 Model Configuration、embedding 模型、融合权重、reranker、候选数和 Top-K 仍需按后续 Ticket 冻结。具体云端模型由操作者选择，不写死在本 specification 中，且选择不得扩大产品范围。
+- 当前有效 ADR 为单 Active Hypothesis 与按决策重建上下文、结构化 Tool Runtime、Lightweight Code Search、按运行目录持久化、使用本地 Schema 校验与显式 Structured Output Mode 的单一 OpenAI-compatible 云端 ModelProvider，以及最小 Docker 执行边界。旧的多候选状态机、混合检索、检索消融、SQLite、模型兜底、原生 strict Schema 通用最低要求和完整容器控制 ADR 已被取代。
+- Task 1 已冻结为 django-waffle v5.0.0 基础快照及其人工注入 Faulty Commit；Task 2、Task 3、运行时 Model Configuration，以及 `search_code` 的查询/结果上限仍需按后续 Ticket 冻结。具体云端模型由操作者选择，不写死在本 specification 中，且选择不得扩大产品范围。
 - Model Compatibility Gate 是兼容性风险检查，不是 Benchmark 或 Diagnosis Run 授权。若已配置模型在显式 Structured Output Mode 下无法产生通过本地 Schema 校验的阶段对象、工具参数、Evidence 更新和小型补丁，操作者应更换 Model Configuration，而不是增加 Provider 品牌分支或模糊输出修复。
 - MVP 的合理简历表述是“在一个冻结 Django 项目上实现可复用的 Diagnosis Task 工作流，并以三个业务逻辑回归任务验证动态工具选择、Evidence 更新和补丁 Validation”。不得表述为能够泛化诊断任意 Python/Django 项目。
 - 在 GitHub issue tracker 中，本 specification 应使用 `ready-for-agent` 标签。后续 ticket 拆解必须以本文件和权威设计为准，不得从旧研究级 specification 恢复已延期能力。

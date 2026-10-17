@@ -23,9 +23,9 @@ M4 — Evaluation & Delivery
 - 实现确定性的 Trajectory Evaluation：single-active、append-only History、Experiment 目的/预期/falsification relevance、Evidence 引用、reject-before-reformulate、H1～H3 Budget、停止原因和 supported-H patch 规则。
 - 输出逐任务结果，不汇总带泛化暗示的成功率。
 - 提供触发条件、缺陷位置、传播路径和失败表现的人工核查表。
-- 文档化本地环境、模型 preflight、索引、诊断、评测和产物检查流程。
+- 文档化本地环境、模型 preflight、Lightweight Code Search 可用性、诊断、评测和产物检查流程。
 - 默认自动化测试使用 FakeModelProvider；Model Compatibility Gate、真实模型和 Docker Evaluation 显式运行。
-- 明确完整目标与 Day-7 降级后的实际范围。
+- 明确 Task 1 优先、Task 2 代码探索与可选 Task 3 的实际交付范围。
 
 ## Out of Scope
 
@@ -45,7 +45,7 @@ Evaluation Harness 作为应用服务适配器读取 Ground Truth 和 Diagnosis 
 4. 建立人工因果核查模板和逐任务结果记录。
 5. 让 Harness 通过 Diagnosis Application Service 执行 Fake 与真实模式。
 6. 编写从环境准备到产物审查的本地验收步骤。
-7. 执行完整目标或已触发的降级任务集，并记录实际结果和失败。
+7. 按 Task 1 → Task 2 → Task 3 的交付优先级执行实际任务集，并记录实际结果和失败。
 
 ## Acceptance Criteria
 
@@ -57,8 +57,8 @@ Evaluation Harness 作为应用服务适配器读取 Ground Truth 和 Diagnosis 
 - [ ] 补丁通过不会覆盖 Root Symbol 未命中或因果核查失败。
 - [ ] 人工核查分别记录触发条件、缺陷位置、传播路径和失败表现。
 - [ ] 默认测试无需 API Key、GPU 和网络；Model Compatibility Gate 与真实模型/Docker Evaluation 只能显式启动。
-- [ ] 本地验收说明涵盖 Model Configuration、兼容性门禁、索引、诊断、评测、运行产物和已知失败。
-- [ ] 如果采用 Day-7 降级，文档、任务集和报告合同同步反映实际范围。
+- [ ] 本地验收说明涵盖 Model Configuration、兼容性门禁、Lightweight Code Search、诊断、评测、运行产物和已知失败，不包含索引准备步骤。
+- [ ] 如果总周期不足而延期 Task 3，文档、任务集和报告合同同步反映实际范围，同时保留已有 Falsification 与 Bounded Reformulation 不变量检查。
 
 ## Testing Strategy
 
@@ -70,16 +70,18 @@ Evaluation Harness 作为应用服务适配器读取 Ground Truth 和 Diagnosis 
 
 ## Dependencies
 
-完整目标：
+完整验收目标：
 
 - CRCA-007 — 完成 Supported Hypothesis 补丁 Validation 闭环
-- CRCA-010 — 使用 Task 2 验证 RAG 诊断路径
+- CRCA-010 — 使用 Task 2 验证 Code Exploration 与 Root Cause Localization
 - CRCA-011 — 使用 Task 3 验证 Bounded Self-Correction
 
-Day-7 降级路径：
+最小发布验收：
 
 - CRCA-007 — 完成 Supported Hypothesis 补丁 Validation 闭环
-- CRCA-010 — 使用 Task 2 验证 RAG 诊断路径
+- CRCA-010 — 使用 Task 2 验证 Code Exploration 与 Root Cause Localization
+
+CRCA-011 仅影响 Task 3 的实际验收集合，不阻塞 Evaluation Harness 与 Task 1/Task 2 的确定性检查器实现。
 
 ## Risks
 
@@ -104,7 +106,7 @@ Day-7 降级路径：
 
 - ADR-0014 — 单 Active Hypothesis 与按决策重建上下文
 - ADR-0002 — 使用结构化工具运行时且不实现 MCP
-- ADR-0007 — 两周 MVP 使用固定混合检索管线
+- ADR-0015 — CodeRCA MVP 使用 Lightweight Code Search
 - ADR-0008 — 两周 MVP 按 Diagnosis Run 目录保存记录
 - ADR-0013 — 本地 Schema 校验与显式 Structured Output Mode
 - ADR-0010 — 两周 MVP 采用最小 Docker 执行边界

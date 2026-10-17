@@ -1,85 +1,76 @@
 # CRCA-009 — 增加固定 CPU Reranker
 
+## Status
+
+Superseded / Deferred — Out of MVP
+
+本 Ticket 保留为历史规划记录。ADR-0015 已用 Lightweight Code Search 取代完整混合代码 RAG，当前 CodeRCA MVP 不实现 CPU Reranker；不得把本文件作为当前开发任务或其他 MVP Ticket 的必需依赖。
+
 ## Priority
 
-P1
+Deferred
 
 ## Milestone
 
-M3 — Retrieval & Generalization Evidence
+Future Retrieval Research（不属于 CodeRCA MVP）
 
 ## Background
 
-完整目标希望展示 BM25、向量融合后的小候选集重排，但 reranker 不应改变 Agent 工具协议，也不能成为两周闭环的必要条件。它是 Spec 明确允许在第七天首先删除的增强项。
+ADR-0007 曾计划在 BM25/向量融合后使用固定 CPU Reranker，以展示完整 Code RAG 数据路径。项目现在将 Chunking、Embedding、Hybrid Retrieval、Reranking 和 Retrieval Evaluation 交给独立 RAG 项目，CodeRCA 聚焦 Agent Engineering。
 
 ## Goal
 
-在保持 `search_code` 输入输出合同不变的前提下，用一个固定 CPU reranker 对融合候选进行可复现重排。
+不在当前 MVP 中实施。未来只有在 Lightweight Code Search 对已冻结诊断任务反复出现可复现词汇鸿沟、已有独立相关性标注，并且高级检索收益可以与 Agent 决策分离评估时，才重新拆分新的 Retrieval Ticket。
 
 ## Scope
 
-- 冻结一个 CPU 可运行的 reranker 及其版本。
-- 固定 rerank 输入候选数、批大小和最终 Top-K。
-- 在运行产物中记录融合前后顺序和检索相关性分数；该分数不得进入 Evidence 或 Hypothesis Assessment。
-- 保持 `search_code` 对 Agent 暴露的 Tool Spec 不变。
-- 为关闭 reranker 的降级配置保留相同结果 Schema。
+- 保留本地历史 Ticket 与原编号，说明范围决策的演化。
+- 明确 CRCA-009 不属于当前 MVP、交付顺序或验收合同。
 
 ## Out of Scope
 
-- GPU reranking、诊断模型选择 Benchmark、参数搜索或消融研究。
-- 声明 reranker 带来可量化命中率提升。
-- 修改 Agent Prompt 或让模型决定是否 rerank。
+- 在 CodeRCA MVP 中选择、下载、集成或运行 reranker。
+- 为 reranker 保留 Provider、配置开关、兼容 Schema 或降级路径。
+- 修改 `search_code` Lightweight Code Search 合同。
+- 把检索相关性分数引入 Evidence、Hypothesis Assessment 或 Evaluation。
 
 ## Technical Approach
 
-把 reranker 作为固定检索管线内部的可删除阶段。它只接收融合后的有限候选，在 CPU 上执行，并产出同一种 Search Result。开启与降级关闭两种配置都必须保持工具合同、元数据和审计字段稳定。
+无当前实现方案。历史上的固定 CPU reranking 方案由 ADR-0015 supersede，不在 CodeRCA 中留下提前抽象或兼容代码。
 
 ## Implementation Steps
 
-1. 选择并冻结 CPU reranker、候选数、批大小和 Top-K。
-2. 接入融合候选到重排结果的数据路径。
-3. 保存重排前后候选、分数和配置元数据。
-4. 实现关闭 reranker 时的合同兼容路径。
-5. 增加确定性、性能门槛和接口兼容测试。
+无。若未来触发重新评估条件，应基于新的数据、指标和项目范围创建新 Ticket，而不是恢复本 Ticket。
 
 ## Acceptance Criteria
 
-- [ ] reranker 在本机 CPU 上运行，不调用云端诊断模型。
-- [ ] 相同索引、查询和配置产生相同的候选顺序。
-- [ ] 重排前后的候选、分数和固定配置可从运行产物审计。
-- [ ] 开启或关闭 reranker 时，`search_code` Tool Spec 与结果 Schema 不变。
-- [ ] reranker 不可用时明确失败；仅在显式降级配置中跳过，不静默改变算法。
-- [ ] 文档不声称已证明 reranker 的独立效果。
+- [x] 本 Ticket 明确标记为 Superseded / Deferred / Out of MVP。
+- [x] 当前 MVP Ticket 不再将 CRCA-009 列为必需依赖。
+- [x] 当前设计、Spec 和 ADR 不再把 CPU Reranker 描述为 CodeRCA MVP 能力或降级阶段。
 
 ## Testing Strategy
 
-- 使用固定小候选集测试稳定排序、同分规则和 Top-K 截断。
-- 对开启/关闭配置执行同一 `search_code` 合同测试。
-- 监测测试进程不初始化 CUDA，并设置可接受的 CPU 延迟上限。
-- 验证运行记录包含模型版本和重排前后结果。
+不适用。当前一致性检查应证明默认依赖、实现计划和验收流程均不要求 reranker 或其模型依赖。
 
 ## Dependencies
 
-- CRCA-008 — 实现固定的混合代码检索流水线
+无当前依赖。
 
 ## Risks
 
-- CPU 延迟超过五分钟单任务预算；限制候选集并在 Day-7 降级时删除该阶段。
-- 本地依赖安装复杂；选择与 Python 环境兼容且可固定版本的轻量实现。
-- 排序分数被误当 Evidence Score；明确它只属于检索内部排序，不参与 Diagnosis Hypothesis Ranking。
+- 历史文件中的标题可能让读者误认为仍计划实施；Status 与本说明必须保持在文件顶部，Issue Tracker 后续同步时也应移除 `ready-for-agent` 语义。
+- 未来在没有独立 Retrieval Evaluation 的情况下恢复 reranker，会重新混淆搜索质量与 Agent 诊断质量。
 
 ## Estimated Effort
 
-0.5 engineer-day
+Not estimated — Out of MVP
 
 ## Related Spec Sections
 
-- User Stories 28, 49–50
-- Implementation Decisions 28, 31, 44
-- Testing Decisions 17, 27
-- Further Notes — 固定 reranker 与 Top-K
+- Out of Scope — 高级检索基础设施
+- Further Notes — Lightweight Code Search 边界
 
 ## Related ADRs
 
-- ADR-0007 — 两周 MVP 使用固定混合检索管线
-- ADR-0013 — 本地 Schema 校验与显式 Structured Output Mode
+- ADR-0015 — CodeRCA MVP 使用 Lightweight Code Search
+- ADR-0007 — 两周 MVP 使用固定混合检索管线（Superseded）

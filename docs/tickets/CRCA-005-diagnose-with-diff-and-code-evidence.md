@@ -32,7 +32,7 @@ M1 — Evidence-Driven Diagnosis
 ## Out of Scope
 
 - `search_code`、`run_tests` 和 `apply_patch` 的真实实现。
-- Docker Experiment、RAG 和补丁搜索。
+- Docker Experiment、Lightweight Code Search 和补丁搜索。
 - Evidence Score、Candidate Ranking、概率或 LLM confidence。
 
 ## Technical Approach
