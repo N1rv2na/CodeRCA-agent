@@ -76,6 +76,39 @@ def test_read_code_uses_registered_tool_spec_and_persists_bounded_result(
     assert (tmp_path / "run" / result.artifact_ref).read_text() == result.output
 
 
+def test_runtime_projects_a_deterministic_safe_tool_catalog(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    runtime = ToolRuntime(workspace, manifest(), enforce_faulty_commit=False)
+
+    catalog = runtime.available_tool_catalog()
+
+    assert [item["name"] for item in catalog] == ["inspect_diff", "read_code"]
+    assert catalog[0]["input_schema"]["type"] == "object"
+    assert catalog[1]["permission"] == "read_only"
+    assert catalog[1]["side_effects"] == "none"
+    assert "handler" not in catalog[0]
+
+
+def test_runtime_validates_tool_name_and_arguments_before_execution(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    runtime = ToolRuntime(workspace, manifest(), enforce_faulty_commit=False)
+
+    with pytest.raises(ValueError, match="not registered") as unknown:
+        runtime.validate_selection("run_test_with_instrumentation", {})
+    with pytest.raises(ValueError, match="arguments") as invalid:
+        runtime.validate_selection(
+            "read_code",
+            {"path": "src/module.py", "start_line": 0, "end_line": 1},
+        )
+
+    assert getattr(unknown.value, "validation_errors")[0]["loc"] == ["tool_name"]
+    assert getattr(invalid.value, "validation_errors")[0]["loc"][0] == "arguments"
+
+
 def test_inspect_diff_reads_only_the_frozen_base_to_faulty_change(
     tmp_path: Path,
 ) -> None:

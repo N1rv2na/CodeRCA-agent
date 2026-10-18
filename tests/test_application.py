@@ -454,6 +454,218 @@ def test_loop_decision_allows_one_schema_correction_without_raw_history(
     assert any(event["event_type"] == "schema_correction_requested" for event in events)
 
 
+def test_unknown_tool_selection_is_corrected_before_budget_or_runtime_execution(
+    tmp_path: Path,
+) -> None:
+    manifest = load_task_1_manifest()
+    workspace = materialize_task_1(tmp_path / "workspace")
+    task = DiagnosisTaskContext(
+        manifest=manifest,
+        ci_failure_excerpt="AssertionError: True is not false",
+        ci_failure_artifact=manifest.ci_log,
+    )
+    provider = FakeModelProvider(
+        structured_responses={
+            "form_hypothesis": {
+                "hypothesis": {
+                    "root_symbol": "AbstractBaseFlag.is_active_for_user",
+                    "location_description": None,
+                    "mechanism": "A truthiness guard ignores explicit False.",
+                    "falsification_criterion": "The diff preserves a None check.",
+                }
+            },
+            "update_evidence": {
+                "hypothesis_id": "H1",
+                "observation_ref": "O1",
+                "direction": "supporting",
+                "explanation": "The diff contains the predicted guard change.",
+            },
+            "assess_hypothesis": {
+                "outcome": "sufficiently_supported",
+                "evidence_refs": ["E1"],
+                "rationale": "The registered diff Evidence supports H1.",
+            },
+        },
+        structured_response_sequences={
+            "select_experiment": [
+                {
+                    "hypothesis_id": "H1",
+                    "purpose": "Instrument and execute the failing test.",
+                    "expected_observation": "The runtime value is printed.",
+                    "falsification_relevance": "A false value falsifies H1.",
+                    "tool_name": "run_test_with_instrumentation",
+                    "arguments": {"test_selector": "test_case_17"},
+                },
+                {
+                    "hypothesis_id": "H1",
+                    "purpose": "Inspect the Faulty Commit diff.",
+                    "expected_observation": "The boolean guard changed.",
+                    "falsification_relevance": "No guard change falsifies H1.",
+                    "tool_name": "inspect_diff",
+                    "arguments": {"path": "waffle/models.py"},
+                },
+            ]
+        },
+    )
+
+    result = DiagnosisApplicationService(
+        provider=provider,
+        run_store=RunStore(tmp_path / "runs"),
+        tool_runtime=ToolRuntime(workspace, manifest),
+    ).start_diagnosis(task)
+
+    assert result.status == "completed"
+    assert result.stop_reason == "read_only_diagnosis_complete"
+    assert provider.structured_calls.count("select_experiment") == 2
+    select_requests = [
+        request
+        for request in provider.structured_requests
+        if request["schema_name"] == "select_experiment"
+    ]
+    first_context = json.loads(select_requests[0]["user_prompt"])
+    corrected_context = json.loads(select_requests[1]["user_prompt"])
+    assert [item["name"] for item in first_context["available_tools"]] == [
+        "inspect_diff",
+        "read_code",
+    ]
+    assert corrected_context["schema_correction"]["validation_errors"][0][
+        "loc"
+    ] == ["tool_name"]
+    events = [json.loads(line) for line in result.events_path.read_text().splitlines()]
+    tool_events = [event for event in events if event["event_type"] == "tool_executed"]
+    assert len(tool_events) == 1
+    assert tool_events[0]["experiment"]["experiment_id"] == "X1"
+    assert tool_events[0]["experiment"]["tool_name"] == "inspect_diff"
+    assert tool_events[0]["tool_result"]["tool_result_id"] == "T1"
+
+
+def test_second_unknown_tool_selection_fails_without_runtime_execution(
+    tmp_path: Path,
+) -> None:
+    manifest = load_task_1_manifest()
+    workspace = materialize_task_1(tmp_path / "workspace")
+    task = DiagnosisTaskContext(
+        manifest=manifest,
+        ci_failure_excerpt="AssertionError: True is not false",
+        ci_failure_artifact=manifest.ci_log,
+    )
+    invalid_selection = {
+        "hypothesis_id": "H1",
+        "purpose": "Instrument and execute the failing test.",
+        "expected_observation": "The runtime value is printed.",
+        "falsification_relevance": "A false value falsifies H1.",
+        "tool_name": "run_test_with_instrumentation",
+        "arguments": {"test_selector": "test_case_17"},
+    }
+    provider = FakeModelProvider(
+        structured_responses={
+            "form_hypothesis": {"hypothesis": proposal_payload("module.h1")}
+        },
+        structured_response_sequences={
+            "select_experiment": [invalid_selection, invalid_selection]
+        },
+    )
+
+    result = DiagnosisApplicationService(
+        provider=provider,
+        run_store=RunStore(tmp_path / "runs"),
+        tool_runtime=ToolRuntime(workspace, manifest),
+    ).start_diagnosis(task)
+
+    assert result.status == "failed"
+    assert result.stop_reason == "schema_failure"
+    assert result.observations == ()
+    assert result.evidence == ()
+    assert provider.structured_calls.count("select_experiment") == 2
+    events = [json.loads(line) for line in result.events_path.read_text().splitlines()]
+    assert sum(
+        event["event_type"] == "schema_correction_requested" for event in events
+    ) == 1
+    assert not any(event["event_type"] == "tool_executed" for event in events)
+    assert not (result.run_directory / "tool-results").exists()
+
+
+def test_observation_id_in_assessment_is_corrected_before_state_mutation(
+    tmp_path: Path,
+) -> None:
+    manifest = load_task_1_manifest()
+    workspace = materialize_task_1(tmp_path / "workspace")
+    task = DiagnosisTaskContext(
+        manifest=manifest,
+        ci_failure_excerpt="AssertionError: True is not false",
+        ci_failure_artifact=manifest.ci_log,
+    )
+    provider = FakeModelProvider(
+        structured_responses={
+            "form_hypothesis": {
+                "hypothesis": {
+                    "root_symbol": "AbstractBaseFlag.is_active_for_user",
+                    "location_description": None,
+                    "mechanism": "A truthiness guard ignores explicit False.",
+                    "falsification_criterion": "The diff preserves a None check.",
+                }
+            },
+            "select_experiment": {
+                "hypothesis_id": "H1",
+                "purpose": "Inspect the Faulty Commit diff.",
+                "expected_observation": "The boolean guard changed.",
+                "falsification_relevance": "No guard change falsifies H1.",
+                "tool_name": "inspect_diff",
+                "arguments": {"path": "waffle/models.py"},
+            },
+            "update_evidence": {
+                "hypothesis_id": "H1",
+                "observation_ref": "O1",
+                "direction": "supporting",
+                "explanation": "The diff contains the predicted guard change.",
+            },
+        },
+        structured_response_sequences={
+            "assess_hypothesis": [
+                {
+                    "outcome": "sufficiently_supported",
+                    "evidence_refs": ["E1", "O1"],
+                    "rationale": "The diff and its Observation support H1.",
+                },
+                {
+                    "outcome": "sufficiently_supported",
+                    "evidence_refs": ["E1"],
+                    "rationale": "The registered Evidence E1 supports H1.",
+                },
+            ]
+        },
+    )
+
+    result = DiagnosisApplicationService(
+        provider=provider,
+        run_store=RunStore(tmp_path / "runs"),
+        tool_runtime=ToolRuntime(workspace, manifest),
+    ).start_diagnosis(task)
+
+    assert result.status == "completed"
+    assert result.stop_reason == "read_only_diagnosis_complete"
+    assert result.hypothesis_history[0].status == "supported"
+    assert provider.structured_calls.count("assess_hypothesis") == 2
+    assessment_requests = [
+        request
+        for request in provider.structured_requests
+        if request["schema_name"] == "assess_hypothesis"
+    ]
+    corrected_context = json.loads(assessment_requests[1]["user_prompt"])
+    error = corrected_context["schema_correction"]["validation_errors"][0]
+    assert error["loc"] == ["evidence_refs", 1]
+    assert error["input"] == "O1"
+    assert error["allowed_evidence_ids"] == ["E1"]
+    events = [json.loads(line) for line in result.events_path.read_text().splitlines()]
+    assert (
+        len([event for event in events if event["event_type"] == "tool_executed"])
+        == 1
+    )
+    assert len(
+        [event for event in events if event["event_type"] == "evidence_recorded"]
+    ) == 1
+
+
 def test_second_invalid_loop_decision_finalizes_with_preserved_history(
     tmp_path: Path,
 ) -> None:

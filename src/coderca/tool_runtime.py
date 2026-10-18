@@ -8,11 +8,17 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from .contracts import Experiment, TaskManifest, ToolErrorCategory, ToolResult
+from .contracts import (
+    DecisionValidationError,
+    Experiment,
+    TaskManifest,
+    ToolErrorCategory,
+    ToolResult,
+)
 
 _MAX_READ_LINES = 200
 _DEFAULT_RESULT_LIMIT = 12_000
@@ -121,6 +127,60 @@ class ToolRuntime:
                 handler=self._read_code,
             ),
         }
+
+    def available_tool_catalog(self) -> list[dict[str, Any]]:
+        """Project registered Tool Specs into a deterministic model-safe view."""
+
+        return [
+            {
+                "name": spec.name,
+                "description": spec.description,
+                "input_schema": spec.input_schema,
+                "permission": spec.permission,
+                "side_effects": spec.side_effects,
+                "timeout_seconds": spec.timeout_seconds,
+                "result_limit": spec.result_limit,
+            }
+            for spec in (
+                self.tool_specs[name] for name in sorted(self.tool_specs)
+            )
+        ]
+
+    def validate_selection(
+        self, tool_name: str, arguments: dict[str, object]
+    ) -> None:
+        """Validate a model-selected call before state or budget mutation."""
+
+        spec = self.tool_specs.get(tool_name)
+        if spec is None:
+            raise DecisionValidationError(
+                f"tool {tool_name!r} is not registered",
+                [
+                    {
+                        "loc": ["tool_name"],
+                        "type": "tool_not_registered",
+                        "msg": "Tool name is not registered.",
+                        "input": tool_name,
+                        "allowed_tools": sorted(self.tool_specs),
+                    }
+                ],
+            )
+        try:
+            spec.input_model.model_validate(arguments)
+        except ValidationError as exc:
+            errors = [
+                {
+                    "loc": ["arguments", *item["loc"]],
+                    "type": item["type"],
+                    "msg": item["msg"],
+                    "input": item.get("input"),
+                }
+                for item in exc.errors(include_url=False, include_context=False)
+            ]
+            raise DecisionValidationError(
+                f"arguments for tool {tool_name!r} do not satisfy its schema",
+                errors,
+            ) from exc
 
     def _verify_faulty_commit(self) -> None:
         try:

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Callable, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel
 
 from .context_builder import ContextBuilder, DiagnosisTaskContext
 from .contracts import (
+    DecisionValidationError,
     DiagnosisEvent,
     DiagnosisEventFailureCategory,
     DiagnosisFailureCategory,
@@ -271,6 +272,7 @@ class DiagnosisApplicationService:
             select_context = ContextBuilder().build_select_experiment(
                 task,
                 state,
+                available_tools=runtime.available_tool_catalog(),
                 experiments=list(state.experiments),
                 observations=list(state.observations),
                 evidence=list(state.evidence),
@@ -284,12 +286,17 @@ class DiagnosisApplicationService:
                 artifacts=artifacts,
                 schema_name="select_experiment",
                 system_prompt=(
-                    "Select one falsification-first read-only Experiment. Return "
-                    "only the requested structured object."
+                    "Select one falsification-first read-only Experiment using "
+                    "exactly one tool from available_tools and arguments matching "
+                    "that tool's input_schema. Return only the requested structured "
+                    "object."
                 ),
                 context=select_context,
                 response_model=SelectExperimentDecision,
                 model_sequence=model_sequence,
+                decision_validator=lambda value: runtime.validate_selection(
+                    value.tool_name, value.arguments
+                ),
             )
             decision = selected.value
             experiment = Experiment(
@@ -392,12 +399,15 @@ class DiagnosisApplicationService:
                 artifacts=artifacts,
                 schema_name="assess_hypothesis",
                 system_prompt=(
-                    "Assess the Active Hypothesis from registered Evidence. Return "
-                    "only the requested structured object."
+                    "Assess the Active Hypothesis from registered Evidence. "
+                    "evidence_refs may contain only evidence_id values listed in "
+                    "relevant_evidence; never cite Observation, Experiment, or Tool "
+                    "Result IDs. Return only the requested structured object."
                 ),
                 context=assessment_context,
                 response_model=HypothesisAssessmentDecision,
                 model_sequence=model_sequence,
+                decision_validator=state.validate_hypothesis_assessment,
             )
             assessed_hypothesis = state.apply_hypothesis_assessment(assessed.value)
             events.append(
@@ -494,6 +504,7 @@ class DiagnosisApplicationService:
         context: dict[str, object],
         response_model: type[DecisionModel],
         model_sequence: int,
+        decision_validator: Callable[[DecisionModel], object] | None = None,
     ) -> tuple[StructuredModelResponse[DecisionModel], str, int]:
         correction: dict[str, object] | None = None
         last_artifact: str | None = None
@@ -509,6 +520,18 @@ class DiagnosisApplicationService:
                     user_prompt=json.dumps(request_context, sort_keys=True),
                     response_model=response_model,
                 )
+                if decision_validator is not None:
+                    try:
+                        decision_validator(response.value)
+                    except DecisionValidationError as exc:
+                        raise ModelProviderError(
+                            "schema_mismatch",
+                            str(exc),
+                            {"validation_errors": exc.validation_errors},
+                            persistence_safe_artifact=(
+                                response.persistence_safe_artifact
+                            ),
+                        ) from exc
             except ModelProviderError as exc:
                 model_sequence += 1
                 last_errors = _validation_errors(exc)

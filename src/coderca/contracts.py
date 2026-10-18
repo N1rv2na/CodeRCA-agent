@@ -39,6 +39,16 @@ HypothesisAssessmentOutcome = Literal[
 ]
 
 
+class DecisionValidationError(ValueError):
+    """A structured model decision violates current runtime/domain constraints."""
+
+    def __init__(
+        self, message: str, validation_errors: list[dict[str, object]]
+    ) -> None:
+        super().__init__(message)
+        self.validation_errors = validation_errors
+
+
 class DiagnosisStage(str, Enum):
     """Program-owned lifecycle stage for one Diagnosis Run."""
 

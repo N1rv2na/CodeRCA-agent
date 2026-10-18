@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .contracts import (
+    DecisionValidationError,
     DiagnosisStage,
     Evidence,
     Experiment,
@@ -432,32 +433,19 @@ class DiagnosisStateMachine:
             raise InvalidDiagnosisTransition(
                 "Hypothesis assessment is only allowed while updating_evidence"
             )
+        try:
+            self.validate_hypothesis_assessment(decision)
+        except DecisionValidationError as exc:
+            raise InvalidDiagnosisTransition(str(exc)) from exc
         active = self.active_hypothesis
-        if active is None:
+        if active is None:  # guarded by validate_hypothesis_assessment
             raise InvalidDiagnosisTransition(
                 "Hypothesis assessment requires one Active Hypothesis"
             )
-        evidence_by_id = {item.evidence_id: item for item in self._evidence}
-        try:
-            referenced = [evidence_by_id[item] for item in decision.evidence_refs]
-        except KeyError as exc:
-            raise InvalidDiagnosisTransition(
-                "Hypothesis assessment references unknown Evidence"
-            ) from exc
-        if any(item.hypothesis_id != active.hypothesis_id for item in referenced):
-            raise InvalidDiagnosisTransition(
-                "Hypothesis assessment Evidence must belong to the Active Hypothesis"
-            )
 
         if decision.outcome == "falsified":
-            if not any(item.direction == "contradicting" for item in referenced):
-                raise InvalidDiagnosisTransition(
-                    "falsification requires Contradicting Evidence"
-                )
             target: HypothesisStatus = "rejected"
         elif decision.outcome == "sufficiently_supported":
-            if not any(item.direction == "supporting" for item in referenced):
-                raise InvalidDiagnosisTransition("support requires Supporting Evidence")
             target = "supported"
         elif decision.outcome == "inconclusive":
             target = "inconclusive"
@@ -469,3 +457,82 @@ class DiagnosisStateMachine:
             return self.transition_hypothesis(active.hypothesis_id, target)
         self.transition_to(DiagnosisStage.DIAGNOSING)
         return self.transition_hypothesis(active.hypothesis_id, target)
+
+    def validate_hypothesis_assessment(
+        self, decision: HypothesisAssessmentDecision
+    ) -> tuple[Evidence, ...]:
+        """Validate model-authored Evidence references without mutating state."""
+
+        if self._stage is not DiagnosisStage.UPDATING_EVIDENCE:
+            raise InvalidDiagnosisTransition(
+                "Hypothesis assessment is only allowed while updating_evidence"
+            )
+        active = self.active_hypothesis
+        if active is None:
+            raise InvalidDiagnosisTransition(
+                "Hypothesis assessment requires one Active Hypothesis"
+            )
+        evidence_by_id = {item.evidence_id: item for item in self._evidence}
+        allowed_ids = sorted(
+            item.evidence_id
+            for item in self._evidence
+            if item.hypothesis_id == active.hypothesis_id
+        )
+        referenced: list[Evidence] = []
+        errors: list[dict[str, object]] = []
+        for index, evidence_id in enumerate(decision.evidence_refs):
+            evidence = evidence_by_id.get(evidence_id)
+            if evidence is None:
+                errors.append(
+                    {
+                        "loc": ["evidence_refs", index],
+                        "type": "unknown_evidence",
+                        "msg": "Evidence ID is not registered.",
+                        "input": evidence_id,
+                        "allowed_evidence_ids": allowed_ids,
+                    }
+                )
+            elif evidence.hypothesis_id != active.hypothesis_id:
+                errors.append(
+                    {
+                        "loc": ["evidence_refs", index],
+                        "type": "evidence_wrong_hypothesis",
+                        "msg": "Evidence does not belong to the Active Hypothesis.",
+                        "input": evidence_id,
+                        "allowed_evidence_ids": allowed_ids,
+                    }
+                )
+            else:
+                referenced.append(evidence)
+        if errors:
+            raise DecisionValidationError(
+                "Hypothesis assessment references unknown Evidence", errors
+            )
+
+        expected_direction: str | None = None
+        message: str | None = None
+        if decision.outcome == "falsified":
+            expected_direction = "contradicting"
+            message = "falsification requires Contradicting Evidence"
+        elif decision.outcome == "sufficiently_supported":
+            expected_direction = "supporting"
+            message = "support requires Supporting Evidence"
+        if expected_direction is not None and not any(
+            item.direction == expected_direction for item in referenced
+        ):
+            raise DecisionValidationError(
+                message or "Evidence direction is incompatible with assessment",
+                [
+                    {
+                        "loc": ["evidence_refs"],
+                        "type": "incompatible_evidence_direction",
+                        "msg": message
+                        or "Evidence direction is incompatible with assessment.",
+                        "expected_direction": expected_direction,
+                        "referenced_directions": [
+                            item.direction for item in referenced
+                        ],
+                    }
+                ],
+            )
+        return tuple(referenced)

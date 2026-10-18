@@ -91,6 +91,7 @@ class ContextBuilder:
         task: DiagnosisTaskContext,
         state: DiagnosisStateMachine,
         *,
+        available_tools: list[dict[str, Any]],
         experiments: list[Experiment],
         observations: list[Observation],
         evidence: list[Evidence],
@@ -100,6 +101,7 @@ class ContextBuilder:
         relevant_ids = {active.hypothesis_id}
         return {
             "decision_type": "select_experiment",
+            "available_tools": available_tools,
             "task_context": self._task_context(task),
             "diagnosis_state": self._diagnosis_state(
                 task, state, used_tool_calls=used_tool_calls

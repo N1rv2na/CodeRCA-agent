@@ -364,6 +364,50 @@ def test_falsified_assessment_without_contradicting_evidence_is_rejected() -> No
     assert state.active_hypothesis is not None
 
 
+def test_assessment_semantic_validation_is_non_mutating_and_reports_allowed_evidence(
+) -> None:
+    state = DiagnosisStateMachine()
+    form_h1(state)
+    register_evidence(state, direction="supporting")
+    assessment = HypothesisAssessmentDecision(
+        outcome="sufficiently_supported",
+        evidence_refs=("E1", "O1"),
+        rationale="E1 supports H1, while O1 is mistakenly cited as Evidence.",
+    )
+
+    with pytest.raises(ValueError, match="unknown Evidence") as raised:
+        state.validate_hypothesis_assessment(assessment)
+
+    errors = getattr(raised.value, "validation_errors")
+    assert errors[0]["loc"] == ["evidence_refs", 1]
+    assert errors[0]["input"] == "O1"
+    assert errors[0]["allowed_evidence_ids"] == ["E1"]
+    assert state.stage is DiagnosisStage.UPDATING_EVIDENCE
+    assert state.active_hypothesis is not None
+    assert state.active_hypothesis.status == "proposed"
+
+
+def test_assessment_semantic_validation_rejects_incompatible_evidence_direction(
+) -> None:
+    state = DiagnosisStateMachine()
+    form_h1(state)
+    register_evidence(state, direction="supporting")
+    assessment = HypothesisAssessmentDecision(
+        outcome="falsified",
+        evidence_refs=("E1",),
+        rationale="An invalid attempt to falsify H1 with Supporting Evidence.",
+    )
+
+    with pytest.raises(ValueError, match="Contradicting Evidence") as raised:
+        state.validate_hypothesis_assessment(assessment)
+
+    errors = getattr(raised.value, "validation_errors")
+    assert errors[0]["loc"] == ["evidence_refs"]
+    assert errors[0]["type"] == "incompatible_evidence_direction"
+    assert state.stage is DiagnosisStage.UPDATING_EVIDENCE
+    assert state.active_hypothesis is not None
+
+
 def test_continue_testing_assessment_keeps_testing_hypothesis_active() -> None:
     state = DiagnosisStateMachine()
     form_h1(state)

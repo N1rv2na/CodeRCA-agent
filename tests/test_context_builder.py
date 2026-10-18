@@ -116,6 +116,15 @@ def test_experiment_context_contains_only_active_hypothesis_knowledge() -> None:
     context = ContextBuilder().build_select_experiment(
         task_context(),
         state,
+        available_tools=[
+            {
+                "name": "read_code",
+                "description": "Read bounded source lines.",
+                "input_schema": {"type": "object"},
+                "permission": "read_only",
+                "side_effects": "none",
+            }
+        ],
         experiments=[experiment],
         observations=[observation],
         evidence=[evidence],
@@ -127,6 +136,7 @@ def test_experiment_context_contains_only_active_hypothesis_knowledge() -> None:
     assert context["relevant_evidence"][0]["evidence_id"] == "E1"
     assert context["relevant_observations"][0]["observation_id"] == "O1"
     assert context["diagnosis_state"]["remaining_tool_budget"] == 7
+    assert context["available_tools"][0]["name"] == "read_code"
 
 
 def test_evidence_context_contains_experiment_and_bounded_observation() -> None:
