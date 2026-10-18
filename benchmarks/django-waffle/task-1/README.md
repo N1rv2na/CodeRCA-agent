@@ -30,14 +30,18 @@ must not be accepted as the target failure.
 
 Runtime pins are Python 3.11, Django 5.2.16, asgiref 3.9.2, and sqlparse 0.5.4;
 wheel hashes are recorded in `requirements.lock`. `Dockerfile` builds the
-Manifest image `coderca/django-waffle-task-1:5.0.0-py311-v1` from the pinned
+Manifest image `coderca/django-waffle-task-1:5.0.0-py311-v2` from the pinned
 official base image
 `python:3.11-slim-bookworm@sha256:b18992999dbe963a45a8a4da40ac2b1975be1a776d939d098c647482bcad5cba`.
+The image fixes `PYTHONPATH=/workspace` so the image-owned probe can import the
+tracked Django settings and repository code from the temporary bind mount. It
+also disables bytecode writes so the root container does not leave root-owned
+`__pycache__` files in the host-owned temporary workspace.
 
 Build it from this directory with:
 
 ```text
-docker build -t coderca/django-waffle-task-1:5.0.0-py311-v1 .
+docker build -t coderca/django-waffle-task-1:5.0.0-py311-v2 .
 ```
 
 To materialize and execute the task from a configured Python environment:

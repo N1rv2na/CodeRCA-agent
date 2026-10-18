@@ -22,7 +22,7 @@ FAULTY_COMMIT_SHA = "51e2424a0a6d8817291e5696b0cfbb1b3384a699"
 TASK_1_ID = "crca-002-task-1"
 TASK_1_COMMAND_ID = "django_waffle_task_1_v1"
 TASK_1_CI_LOG = "ci/task-1-failure.log"
-DOCKER_IMAGE = "coderca/django-waffle-task-1:5.0.0-py311-v1"
+DOCKER_IMAGE = "coderca/django-waffle-task-1:5.0.0-py311-v2"
 TASK_1_READ_PATHS = ("waffle/",)
 TASK_1_WRITE_PATHS = ("waffle/models.py",)
 

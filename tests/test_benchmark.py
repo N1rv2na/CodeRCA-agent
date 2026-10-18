@@ -84,7 +84,7 @@ def test_task_1_manifest_uses_the_frozen_waffle_snapshot() -> None:
     assert TASK_1_MANIFEST.test_command_id == TASK_1_COMMAND_ID
     assert (
         TASK_1_MANIFEST.docker_image
-        == "coderca/django-waffle-task-1:5.0.0-py311-v1"
+        == "coderca/django-waffle-task-1:5.0.0-py311-v2"
     )
     assert TASK_1_MANIFEST.read_paths == ["waffle/"]
     assert TASK_1_MANIFEST.write_paths == ["waffle/models.py"]
@@ -249,5 +249,7 @@ def test_task_1_docker_build_inputs_are_frozen() -> None:
     )
     assert "--require-hashes -r requirements.lock" in dockerfile
     assert "COPY probe.py ./probe.py" in dockerfile
+    assert "ENV PYTHONPATH=/workspace\n" in dockerfile
+    assert "ENV PYTHONDONTWRITEBYTECODE=1\n" in dockerfile
     assert "Django==5.2.16" in requirements
     assert requirements.count("--hash=sha256:") == 3

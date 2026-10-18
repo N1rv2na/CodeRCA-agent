@@ -6,4 +6,6 @@ RUN python -m pip install --no-cache-dir --require-hashes -r requirements.lock \
     && python -m pip check
 COPY probe.py ./probe.py
 
+ENV PYTHONPATH=/workspace
+ENV PYTHONDONTWRITEBYTECODE=1
 WORKDIR /workspace
