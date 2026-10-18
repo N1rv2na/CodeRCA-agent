@@ -495,13 +495,20 @@ class ToolRuntime:
             exit_code=completed.returncode,
             output=completed.stdout or "",
         )
-        successful_exit_codes = {0, *command.test_failure_exit_codes}
-        if completed.returncode not in successful_exit_codes:
+        output = completed.stdout or ""
+        marker_matches = not command.test_failure_output_markers or any(
+            marker in output for marker in command.test_failure_output_markers
+        )
+        is_test_outcome = completed.returncode == 0 or (
+            completed.returncode in command.test_failure_exit_codes
+            and marker_matches
+        )
+        if not is_test_outcome:
             raise _ToolFailure(
                 "execution_failed",
                 (
                     "registered test command could not produce a test outcome; "
-                    f"exit code {completed.returncode} is not registered"
+                    "exit code or required failure marker is not registered"
                 ),
                 artifact_output=artifact,
                 command_id=command.command_id,

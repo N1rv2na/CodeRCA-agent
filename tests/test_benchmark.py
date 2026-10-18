@@ -232,6 +232,9 @@ def test_task_1_registered_command_is_fixed_argv_not_shell() -> None:
         "schema_version": "1",
         "timeout_seconds": 30,
         "test_failure_exit_codes": [1],
+        "test_failure_output_markers": [
+            "CRCA_TASK_1_EXPECTED_ASSERTION_MISMATCH"
+        ],
     }
     assert "shell" not in command
 

@@ -92,6 +92,7 @@ class RegisteredTestCommand(ContractModel):
     argv: tuple[NonEmptyString, ...] = Field(min_length=1)
     timeout_seconds: int = Field(ge=1, le=300)
     test_failure_exit_codes: tuple[TestFailureExitCode, ...] = (1,)
+    test_failure_output_markers: tuple[NonEmptyString, ...] = ()
 
     @model_validator(mode="after")
     def require_unique_test_failure_exit_codes(self) -> RegisteredTestCommand:
@@ -99,6 +100,10 @@ class RegisteredTestCommand(ContractModel):
             self.test_failure_exit_codes
         ):
             raise ValueError("test failure exit codes must be unique")
+        if len(set(self.test_failure_output_markers)) != len(
+            self.test_failure_output_markers
+        ):
+            raise ValueError("test failure output markers must be unique")
         return self
 
 

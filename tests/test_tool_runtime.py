@@ -374,6 +374,45 @@ def test_run_tests_classifies_unregistered_nonzero_exit_as_execution_failure(
     assert result.exit_code == 2
 
 
+def test_run_tests_requires_registered_failure_marker_when_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    command = registered_command().model_copy(
+        update={"test_failure_output_markers": ("EXPECTED_ASSERTION",)}
+    )
+    runtime = ToolRuntime(
+        workspace,
+        manifest(),
+        registered_test_command=command,
+        enforce_faulty_commit=False,
+    )
+
+    def initialization_error(
+        docker_command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        return subprocess.CompletedProcess(
+            docker_command,
+            1,
+            stdout="Traceback: Django settings initialization failed\n",
+        )
+
+    monkeypatch.setattr(
+        "coderca.tool_runtime.subprocess.run", initialization_error
+    )
+
+    result = runtime.execute(
+        experiment("run_tests", {"test_command_id": "tests"}),
+        artifact_directory=tmp_path / "run" / "tool-results",
+    )
+
+    assert result.status == "error"
+    assert result.error_category == "execution_failed"
+    assert result.exit_code == 1
+
+
 def test_run_tests_reports_cleanup_failure_instead_of_claiming_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -455,7 +494,7 @@ def test_run_tests_materializes_only_clean_tracked_faulty_commit_files(
         return subprocess.CompletedProcess(
             docker_command,
             1,
-            stdout="expected failure\n",
+            stdout="CRCA_TASK_1_EXPECTED_ASSERTION_MISMATCH\n",
         )
 
     monkeypatch.setattr(
