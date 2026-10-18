@@ -83,6 +83,15 @@ class TaskManifest(ContractModel):
     tool_call_limit: int = Field(ge=1, le=8)
 
 
+class RegisteredTestCommand(ContractModel):
+    """Author-owned argv that a Diagnosis Task permits `run_tests` to execute."""
+
+    schema_version: Literal["1"]
+    command_id: NonEmptyString
+    argv: tuple[NonEmptyString, ...] = Field(min_length=1)
+    timeout_seconds: int = Field(ge=1, le=300)
+
+
 class EvaluationGroundTruth(ContractModel):
     """Evaluation-only facts that must not enter Agent-visible task input."""
 
@@ -183,6 +192,8 @@ class ToolResult(ContractModel):
     duration_ms: int = Field(ge=0)
     error_category: ToolErrorCategory | None = None
     error_message: str | None = None
+    command_id: NonEmptyString | None = None
+    exit_code: int | None = None
 
     @model_validator(mode="after")
     def require_consistent_status(self) -> ToolResult:
@@ -194,6 +205,12 @@ class ToolResult(ContractModel):
             self.error_category is None or not self.error_message
         ):
             raise ValueError("failed Tool Result requires a classified error")
+        if self.tool_name == "run_tests" and self.status == "success" and (
+            self.command_id is None or self.exit_code is None
+        ):
+            raise ValueError(
+                "successful run_tests Tool Result requires command ID and exit code"
+            )
         return self
 
 

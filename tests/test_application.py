@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from coderca.application import DiagnosisApplicationService
 from coderca.benchmark import load_task_1_manifest, materialize_task_1
 from coderca.context_builder import DiagnosisTaskContext
-from coderca.contracts import TaskManifest
+from coderca.contracts import RegisteredTestCommand, TaskManifest
 from coderca.model_provider import FakeModelProvider
 from coderca.run_store import RunStore
 from coderca.tool_runtime import ToolRuntime
@@ -27,6 +30,84 @@ def resolved_task(valid_manifest_data: dict[str, object]) -> DiagnosisTaskContex
         ci_failure_excerpt="pytest failed: expected 1, got 2",
         ci_failure_artifact=str(valid_manifest_data["ci_log"]),
     )
+
+
+def test_run_tests_experiment_flows_through_observation_evidence_and_report(
+    tmp_path: Path,
+    valid_manifest_data: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    task = resolved_task(valid_manifest_data)
+    command = RegisteredTestCommand(
+        schema_version="1",
+        command_id="registered-tests",
+        argv=("python", "-m", "pytest", "-q"),
+        timeout_seconds=30,
+    )
+    provider = FakeModelProvider(
+        {
+            "form_hypothesis": {"hypothesis": proposal_payload("module.select")},
+            "select_experiment": {
+                "hypothesis_id": "H1",
+                "purpose": "Run the registered failing test against H1.",
+                "expected_observation": "The test reproduces the assertion failure.",
+                "falsification_relevance": "A passing test would falsify H1.",
+                "tool_name": "run_tests",
+                "arguments": {"test_command_id": "registered-tests"},
+            },
+            "update_evidence": {
+                "hypothesis_id": "H1",
+                "observation_ref": "O1",
+                "direction": "supporting",
+                "explanation": "The registered test reproduces the predicted failure.",
+            },
+            "assess_hypothesis": {
+                "outcome": "sufficiently_supported",
+                "evidence_refs": ["E1"],
+                "rationale": "The real test Observation supports H1.",
+            },
+        }
+    )
+
+    def test_failure(
+        docker_command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        return subprocess.CompletedProcess(
+            docker_command,
+            1,
+            stdout="FAIL: test_case\nAssertionError: expected false\n",
+        )
+
+    monkeypatch.setattr("coderca.tool_runtime.subprocess.run", test_failure)
+    runtime = ToolRuntime(
+        workspace,
+        task.manifest,
+        registered_test_command=command,
+        enforce_faulty_commit=False,
+    )
+
+    result = DiagnosisApplicationService(
+        provider=provider,
+        run_store=RunStore(tmp_path / "runs"),
+        tool_runtime=runtime,
+    ).start_diagnosis(task)
+
+    assert result.status == "completed"
+    assert result.hypothesis_history[0].status == "supported"
+    assert result.observations[0].source == "run_tests"
+    assert result.observations[0].tool_result_ref == "T1"
+    assert "exit_code: 1" in result.observations[0].excerpt
+    assert result.evidence[0].provenance == "run_tests:tool-results/T1.txt"
+    artifact = result.run_directory / result.observations[0].artifact_ref
+    assert "AssertionError: expected false" in artifact.read_text()
+    events = [json.loads(line) for line in result.events_path.read_text().splitlines()]
+    tool_event = next(item for item in events if item["event_type"] == "tool_executed")
+    assert tool_event["experiment"]["tool_name"] == "run_tests"
+    assert tool_event["tool_result"]["command_id"] == "registered-tests"
+    assert tool_event["tool_result"]["exit_code"] == 1
 
 
 def test_start_diagnosis_forms_only_h1_and_persists_observable_artifacts(

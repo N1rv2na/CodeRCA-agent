@@ -22,7 +22,7 @@ from .model_provider import (
     load_model_environment,
 )
 from .run_store import RunStore
-from .tool_runtime import ToolRuntime
+from .tool_runtime import ToolRuntime, load_registered_test_command
 
 
 class ProviderFactory(Protocol):
@@ -119,7 +119,15 @@ def main(
             )
             return 2
         try:
-            tool_runtime = ToolRuntime(workspace, manifest)
+            registered_test_command = load_registered_test_command(
+                manifest_path.parent / "registered-command.json",
+                expected_command_id=manifest.test_command_id,
+            )
+            tool_runtime = ToolRuntime(
+                workspace,
+                manifest,
+                registered_test_command=registered_test_command,
+            )
         except ValueError as exc:
             _write_error(
                 StructuredError(
@@ -181,8 +189,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--workspace",
         help=(
-            "prepared Faulty Commit workspace; when present, run the CRCA-005 "
-            "read-only diagnosis loop"
+            "prepared Faulty Commit workspace; when present, run the bounded "
+            "diagnosis loop with registered tools"
         ),
     )
     return parser

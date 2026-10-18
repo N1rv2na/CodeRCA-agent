@@ -189,6 +189,17 @@ def test_cli_workspace_runs_the_read_only_diagnosis_loop(
     assert summary["stop_reason"] == "read_only_diagnosis_complete"
     assert summary["active_hypothesis"] is None
     assert summary["evidence_refs"] == ["E1"]
+    select_request = next(
+        item
+        for item in provider.structured_requests
+        if item["schema_name"] == "select_experiment"
+    )
+    select_context = json.loads(select_request["user_prompt"])
+    assert [item["name"] for item in select_context["available_tools"]] == [
+        "inspect_diff",
+        "read_code",
+        "run_tests",
+    ]
 
 
 def test_cli_workspace_rejects_the_default_formation_only_fake_provider(

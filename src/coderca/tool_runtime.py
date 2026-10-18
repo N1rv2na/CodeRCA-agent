@@ -1,20 +1,25 @@
-"""Typed, bounded runtime for CRCA-005 read-only diagnosis tools."""
+"""Typed, bounded runtime for CodeRCA diagnosis tools."""
 
 from __future__ import annotations
 
+import json
+import shutil
 import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 from typing import Any, Callable, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from .contracts import (
     DecisionValidationError,
     Experiment,
+    RegisteredTestCommand,
     TaskManifest,
     ToolErrorCategory,
     ToolResult,
@@ -22,6 +27,26 @@ from .contracts import (
 
 _MAX_READ_LINES = 200
 _DEFAULT_RESULT_LIMIT = 12_000
+
+
+def load_registered_test_command(
+    path: Path, *, expected_command_id: str
+) -> RegisteredTestCommand:
+    """Load one author-owned argv registry and bind it to the Task Manifest ID."""
+
+    try:
+        command = RegisteredTestCommand.model_validate_json(
+            Path(path).read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError, ValidationError) as exc:
+        raise ValueError(
+            "registered test command does not satisfy its contract"
+        ) from exc
+    if command.command_id != expected_command_id:
+        raise ValueError(
+            "registered test command ID does not match the Task Manifest"
+        )
+    return command
 
 
 class ToolArguments(BaseModel):
@@ -46,7 +71,18 @@ class ReadCodeArguments(ToolArguments):
         return self
 
 
-ToolHandler = Callable[[BaseModel, float], str]
+class RunTestsArguments(ToolArguments):
+    test_command_id: str = Field(min_length=1)
+
+
+@dataclass(frozen=True)
+class _ToolExecutionOutput:
+    content: str
+    command_id: str | None = None
+    exit_code: int | None = None
+
+
+ToolHandler = Callable[[BaseModel, float], str | _ToolExecutionOutput]
 
 
 @dataclass(frozen=True)
@@ -56,10 +92,10 @@ class ToolSpec:
     description: str
     input_model: type[BaseModel]
     output_model: type[BaseModel]
-    permission: Literal["read_only"]
+    permission: Literal["read_only", "code_execution"]
     timeout_seconds: float
     result_limit: int
-    side_effects: Literal["none"]
+    side_effects: Literal["none", "temporary_workspace"]
     error_categories: tuple[ToolErrorCategory, ...]
     handler: ToolHandler
 
@@ -80,6 +116,7 @@ class ToolRuntime:
         workspace_root: Path,
         manifest: TaskManifest,
         *,
+        registered_test_command: RegisteredTestCommand | None = None,
         enforce_faulty_commit: bool = True,
     ) -> None:
         self.workspace_root = Path(workspace_root).resolve()
@@ -88,6 +125,14 @@ class ToolRuntime:
             raise ValueError("Tool Runtime workspace must be a directory")
         if enforce_faulty_commit:
             self._verify_faulty_commit()
+        if (
+            registered_test_command is not None
+            and registered_test_command.command_id != manifest.test_command_id
+        ):
+            raise ValueError(
+                "registered test command ID does not match the Task Manifest"
+            )
+        self.registered_test_command = registered_test_command
         self._call_count = 0
         self.tool_specs = {
             "inspect_diff": ToolSpec(
@@ -127,6 +172,28 @@ class ToolRuntime:
                 handler=self._read_code,
             ),
         }
+        if registered_test_command is not None:
+            self.tool_specs["run_tests"] = ToolSpec(
+                name="run_tests",
+                version="1",
+                description=(
+                    "Run the Task Manifest's registered test command in the "
+                    "minimal Docker execution boundary."
+                ),
+                input_model=RunTestsArguments,
+                output_model=ToolResult,
+                permission="code_execution",
+                timeout_seconds=float(registered_test_command.timeout_seconds),
+                result_limit=_DEFAULT_RESULT_LIMIT,
+                side_effects="temporary_workspace",
+                error_categories=(
+                    "invalid_arguments",
+                    "permission_denied",
+                    "timeout",
+                    "execution_failed",
+                ),
+                handler=self._run_tests,
+            )
 
     def available_tool_catalog(self) -> list[dict[str, Any]]:
         """Project registered Tool Specs into a deterministic model-safe view."""
@@ -166,7 +233,7 @@ class ToolRuntime:
                 ],
             )
         try:
-            spec.input_model.model_validate(arguments)
+            validated = spec.input_model.model_validate(arguments)
         except ValidationError as exc:
             errors = [
                 {
@@ -181,6 +248,23 @@ class ToolRuntime:
                 f"arguments for tool {tool_name!r} do not satisfy its schema",
                 errors,
             ) from exc
+        if isinstance(validated, RunTestsArguments):
+            command = self.registered_test_command
+            if command is None or validated.test_command_id != command.command_id:
+                raise DecisionValidationError(
+                    "run_tests requires the registered Task Manifest command ID",
+                    [
+                        {
+                            "loc": ["arguments", "test_command_id"],
+                            "type": "unknown_registered_command",
+                            "msg": "Test command ID is not registered for this task.",
+                            "input": validated.test_command_id,
+                            "allowed_command_ids": (
+                                [command.command_id] if command is not None else []
+                            ),
+                        }
+                    ],
+                )
 
     def _verify_faulty_commit(self) -> None:
         try:
@@ -209,6 +293,8 @@ class ToolRuntime:
         error_category: ToolErrorCategory | None = None
         error_message: str | None = None
         output = ""
+        command_id: str | None = None
+        exit_code: int | None = None
         result_limit = _DEFAULT_RESULT_LIMIT
         try:
             if spec is None:
@@ -220,10 +306,19 @@ class ToolRuntime:
                 raise _ToolFailure(
                     "invalid_arguments", "tool arguments do not satisfy the schema"
                 ) from exc
-            output = spec.handler(arguments, spec.timeout_seconds)
+            handler_result = spec.handler(arguments, spec.timeout_seconds)
+            if isinstance(handler_result, _ToolExecutionOutput):
+                output = handler_result.content
+                command_id = handler_result.command_id
+                exit_code = handler_result.exit_code
+            else:
+                output = handler_result
         except _ToolFailure as exc:
             error_category = exc.category
             error_message = str(exc)
+            output = exc.artifact_output
+            command_id = exc.command_id
+            exit_code = exc.exit_code
         except subprocess.TimeoutExpired:
             error_category = "timeout"
             error_message = "tool execution exceeded its timeout"
@@ -234,7 +329,9 @@ class ToolRuntime:
             error_category = "execution_failed"
             error_message = f"tool execution failed: {type(exc).__name__}"
 
-        full_artifact = output if error_category is None else error_message or ""
+        full_artifact = output
+        if error_category is not None and not full_artifact:
+            full_artifact = error_message or ""
         artifact_directory = Path(artifact_directory)
         artifact_directory.mkdir(parents=True, exist_ok=True)
         artifact_path = artifact_directory / f"{tool_result_id}.txt"
@@ -253,6 +350,8 @@ class ToolRuntime:
             duration_ms=max(int((monotonic() - started) * 1_000), 0),
             error_category=error_category,
             error_message=error_message,
+            command_id=command_id,
+            exit_code=exit_code,
         )
 
     def _inspect_diff(self, raw: BaseModel, timeout_seconds: float) -> str:
@@ -320,6 +419,114 @@ class ToolRuntime:
             for line_number, line in enumerate(selected, arguments.start_line)
         )
 
+    def _run_tests(
+        self, raw: BaseModel, timeout_seconds: float
+    ) -> _ToolExecutionOutput:
+        arguments = RunTestsArguments.model_validate(raw.model_dump())
+        command = self.registered_test_command
+        if command is None or arguments.test_command_id != command.command_id:
+            raise _ToolFailure(
+                "invalid_arguments",
+                "test command ID is not registered for this Diagnosis Task",
+            )
+
+        container_name = f"coderca-{uuid4().hex}"
+        with tempfile.TemporaryDirectory(prefix="coderca-test-") as directory:
+            execution_workspace = Path(directory) / "workspace"
+            shutil.copytree(
+                self.workspace_root,
+                execution_workspace,
+                symlinks=True,
+            )
+            docker_command = [
+                "docker",
+                "run",
+                "--rm",
+                "--name",
+                container_name,
+                "--network",
+                "none",
+                "--workdir",
+                "/workspace",
+                "--mount",
+                (
+                    f"type=bind,src={execution_workspace},"
+                    "dst=/workspace"
+                ),
+                self.manifest.docker_image,
+                *command.argv,
+            ]
+            try:
+                completed = subprocess.run(
+                    docker_command,
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=timeout_seconds,
+                )
+            except subprocess.TimeoutExpired as exc:
+                self._force_remove_container(container_name)
+                partial = exc.output or ""
+                if isinstance(partial, bytes):
+                    partial = partial.decode("utf-8", errors="replace")
+                artifact = self._format_test_artifact(
+                    command,
+                    exit_code=None,
+                    output=partial,
+                )
+                raise _ToolFailure(
+                    "timeout",
+                    "registered test command exceeded its timeout",
+                    artifact_output=artifact,
+                    command_id=command.command_id,
+                ) from exc
+
+        artifact = self._format_test_artifact(
+            command,
+            exit_code=completed.returncode,
+            output=completed.stdout or "",
+        )
+        if completed.returncode in {125, 126, 127}:
+            raise _ToolFailure(
+                "execution_failed",
+                f"Docker test execution failed with exit code {completed.returncode}",
+                artifact_output=artifact,
+                command_id=command.command_id,
+                exit_code=completed.returncode,
+            )
+        return _ToolExecutionOutput(
+            content=artifact,
+            command_id=command.command_id,
+            exit_code=completed.returncode,
+        )
+
+    @staticmethod
+    def _format_test_artifact(
+        command: RegisteredTestCommand, *, exit_code: int | None, output: str
+    ) -> str:
+        return (
+            f"command_id: {command.command_id}\n"
+            f"argv: {json.dumps(list(command.argv))}\n"
+            f"exit_code: {exit_code if exit_code is not None else 'timeout'}\n"
+            "output:\n"
+            f"{output}"
+        )
+
+    @staticmethod
+    def _force_remove_container(container_name: str) -> None:
+        try:
+            subprocess.run(
+                ["docker", "rm", "--force", container_name],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+
     @staticmethod
     def _read_file_text(path: Path) -> str:
         return path.read_text(encoding="utf-8")
@@ -343,6 +550,17 @@ class ToolRuntime:
 
 
 class _ToolFailure(RuntimeError):
-    def __init__(self, category: ToolErrorCategory, message: str) -> None:
+    def __init__(
+        self,
+        category: ToolErrorCategory,
+        message: str,
+        *,
+        artifact_output: str = "",
+        command_id: str | None = None,
+        exit_code: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.category = category
+        self.artifact_output = artifact_output
+        self.command_id = command_id
+        self.exit_code = exit_code

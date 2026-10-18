@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import shutil
 import subprocess
 import time
 from dataclasses import replace
@@ -8,8 +10,10 @@ from pathlib import Path
 import pytest
 
 from coderca.benchmark import load_task_1_manifest, materialize_task_1
-from coderca.contracts import Experiment, TaskManifest
-from coderca.tool_runtime import ToolRuntime
+from coderca.contracts import Experiment, RegisteredTestCommand, TaskManifest
+from coderca.tool_runtime import ToolRuntime, load_registered_test_command
+
+TASK_1_DIRECTORY = Path("benchmarks/django-waffle/task-1")
 
 
 def manifest() -> TaskManifest:
@@ -38,6 +42,391 @@ def experiment(tool_name: str, arguments: dict[str, object]) -> Experiment:
         tool_name=tool_name,
         arguments=arguments,
     )
+
+
+def registered_command(
+    *, timeout_seconds: int = 30, argv: tuple[str, ...] | None = None
+) -> RegisteredTestCommand:
+    return RegisteredTestCommand(
+        schema_version="1",
+        command_id="tests",
+        argv=argv or ("python", "-m", "pytest", "-q"),
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def test_registered_test_command_loader_accepts_fixed_argv_and_expected_id(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "registered-command.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "command_id": "tests",
+                "argv": ["python", "-m", "pytest", "-q"],
+                "timeout_seconds": 30,
+            }
+        )
+    )
+
+    command = load_registered_test_command(path, expected_command_id="tests")
+
+    assert isinstance(command, RegisteredTestCommand)
+    assert command.argv == ("python", "-m", "pytest", "-q")
+    assert command.timeout_seconds == 30
+
+
+def test_registered_test_command_loader_rejects_shell_or_unexpected_id(
+    tmp_path: Path,
+) -> None:
+    shell_path = tmp_path / "shell-command.json"
+    shell_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "command_id": "tests",
+                "command": "pytest -q; curl https://example.test",
+                "timeout_seconds": 30,
+            }
+        )
+    )
+    valid_path = tmp_path / "registered-command.json"
+    valid_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "command_id": "other-tests",
+                "argv": ["python", "-m", "pytest", "-q"],
+                "timeout_seconds": 30,
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="contract"):
+        load_registered_test_command(shell_path, expected_command_id="tests")
+    with pytest.raises(ValueError, match="does not match"):
+        load_registered_test_command(valid_path, expected_command_id="tests")
+
+
+def test_run_tests_uses_isolated_networkless_workspace_and_preserves_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    source = workspace / "src" / "module.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = 1\n")
+    runtime = ToolRuntime(
+        workspace,
+        manifest(),
+        registered_test_command=registered_command(),
+        enforce_faulty_commit=False,
+    )
+    run_tests_spec = runtime.tool_specs["run_tests"]
+    assert run_tests_spec.permission == "code_execution"
+    assert run_tests_spec.side_effects == "temporary_workspace"
+    assert run_tests_spec.timeout_seconds == 30
+    assert [item["name"] for item in runtime.available_tool_catalog()] == [
+        "inspect_diff",
+        "read_code",
+        "run_tests",
+    ]
+    docker_commands: list[list[str]] = []
+    mounted_workspaces: list[Path] = []
+
+    def completed(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        docker_commands.append(command)
+        mount = command[command.index("--mount") + 1]
+        source_value = next(
+            item.removeprefix("src=")
+            for item in mount.split(",")
+            if item.startswith("src=")
+        )
+        mounted_workspace = Path(source_value)
+        mounted_workspaces.append(mounted_workspace)
+        assert mounted_workspace.is_dir()
+        assert (mounted_workspace / "src" / "module.py").read_text() == "value = 1\n"
+        (mounted_workspace / "container-created.txt").write_text("temporary\n")
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="FAILED test_case\n" + ("x" * 13_000),
+        )
+
+    monkeypatch.setenv("CODERCA_MODEL_API_KEY", "must-not-enter-container")
+    monkeypatch.setenv("CODERCA_MODEL_BASE_URL", "https://models.example/v1")
+    monkeypatch.setattr("coderca.tool_runtime.subprocess.run", completed)
+
+    first = runtime.execute(
+        experiment("run_tests", {"test_command_id": "tests"}),
+        artifact_directory=tmp_path / "run" / "tool-results",
+    )
+    second = runtime.execute(
+        experiment("run_tests", {"test_command_id": "tests"}),
+        artifact_directory=tmp_path / "run" / "tool-results",
+    )
+
+    assert [item[0:2] for item in docker_commands] == [
+        ["docker", "run"],
+        ["docker", "run"],
+    ]
+    assert all("--network" in item and "none" in item for item in docker_commands)
+    assert all("--workdir" in item and "/workspace" in item for item in docker_commands)
+    assert all("--env" not in item and "-e" not in item for item in docker_commands)
+    assert all("must-not-enter-container" not in item for item in docker_commands)
+    assert all("https://models.example/v1" not in item for item in docker_commands)
+    assert all(
+        item[-4:] == ["python", "-m", "pytest", "-q"]
+        for item in docker_commands
+    )
+    assert len(set(mounted_workspaces)) == 2
+    assert all(not item.exists() for item in mounted_workspaces)
+    assert not (workspace / "container-created.txt").exists()
+    assert first.status == "success"
+    assert first.command_id == "tests"
+    assert first.exit_code == 1
+    assert first.truncated is True
+    assert len(first.output) == 12_000
+    artifact = (tmp_path / "run" / first.artifact_ref).read_text()
+    assert 'argv: ["python", "-m", "pytest", "-q"]' in artifact
+    assert "exit_code: 1" in artifact
+    assert len(artifact) > len(first.output)
+    assert second.tool_result_id == "T2"
+
+
+def test_run_tests_passing_exit_is_a_successful_observation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    runtime = ToolRuntime(
+        workspace,
+        manifest(),
+        registered_test_command=registered_command(),
+        enforce_faulty_commit=False,
+    )
+
+    def passed(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        return subprocess.CompletedProcess(command, 0, stdout="1 passed\n")
+
+    monkeypatch.setattr("coderca.tool_runtime.subprocess.run", passed)
+
+    result = runtime.execute(
+        experiment("run_tests", {"test_command_id": "tests"}),
+        artifact_directory=tmp_path / "run" / "tool-results",
+    )
+
+    assert result.status == "success"
+    assert result.exit_code == 0
+    assert "1 passed" in result.output
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"test_command_id": "unknown"},
+        {"test_command_id": "tests", "command": "pytest; curl example.test"},
+        {"test_command_id": "tests", "path": "../outside"},
+    ],
+)
+def test_run_tests_rejects_unregistered_or_model_controlled_execution_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: dict[str, object],
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    runtime = ToolRuntime(
+        workspace,
+        manifest(),
+        registered_test_command=registered_command(),
+        enforce_faulty_commit=False,
+    )
+    calls = 0
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        nonlocal calls
+        calls += 1
+        raise AssertionError("Docker must not start for rejected arguments")
+
+    monkeypatch.setattr("coderca.tool_runtime.subprocess.run", forbidden)
+
+    with pytest.raises(ValueError):
+        runtime.validate_selection("run_tests", arguments)
+    result = runtime.execute(
+        experiment("run_tests", arguments),
+        artifact_directory=tmp_path / "run" / "tool-results",
+    )
+
+    assert result.status == "error"
+    assert result.error_category == "invalid_arguments"
+    assert calls == 0
+
+
+def test_run_tests_timeout_force_removes_container_without_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    runtime = ToolRuntime(
+        workspace,
+        manifest(),
+        registered_test_command=registered_command(timeout_seconds=1),
+        enforce_faulty_commit=False,
+    )
+    calls: list[list[str]] = []
+
+    def timeout_then_cleanup(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        calls.append(command)
+        if command[1] == "run":
+            raise subprocess.TimeoutExpired(command, timeout=1, output="partial\n")
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    monkeypatch.setattr(
+        "coderca.tool_runtime.subprocess.run", timeout_then_cleanup
+    )
+
+    result = runtime.execute(
+        experiment("run_tests", {"test_command_id": "tests"}),
+        artifact_directory=tmp_path / "run" / "tool-results",
+    )
+
+    assert result.status == "error"
+    assert result.error_category == "timeout"
+    assert len(calls) == 2
+    assert calls[1][0:3] == ["docker", "rm", "--force"]
+
+
+def test_run_tests_classifies_docker_execution_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    runtime = ToolRuntime(
+        workspace,
+        manifest(),
+        registered_test_command=registered_command(),
+        enforce_faulty_commit=False,
+    )
+
+    def failed(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        return subprocess.CompletedProcess(command, 125, stdout="daemon unavailable\n")
+
+    monkeypatch.setattr("coderca.tool_runtime.subprocess.run", failed)
+
+    result = runtime.execute(
+        experiment("run_tests", {"test_command_id": "tests"}),
+        artifact_directory=tmp_path / "run" / "tool-results",
+    )
+
+    assert result.status == "error"
+    assert result.error_category == "execution_failed"
+    assert result.exit_code == 125
+    assert "daemon unavailable" in (
+        tmp_path / "run" / result.artifact_ref
+    ).read_text()
+
+
+def test_task_1_registered_command_runs_in_real_docker_when_image_is_available(
+    tmp_path: Path,
+) -> None:
+    manifest_value = load_task_1_manifest()
+    _require_docker_image(manifest_value.docker_image)
+    workspace = materialize_task_1(tmp_path / "workspace")
+    command = load_registered_test_command(
+        TASK_1_DIRECTORY / "registered-command.json",
+        expected_command_id=manifest_value.test_command_id,
+    )
+    runtime = ToolRuntime(
+        workspace,
+        manifest_value,
+        registered_test_command=command,
+    )
+
+    result = runtime.execute(
+        experiment(
+            "run_tests",
+            {"test_command_id": manifest_value.test_command_id},
+        ),
+        artifact_directory=tmp_path / "run" / "tool-results",
+    )
+
+    assert result.status == "success"
+    assert result.exit_code == 1
+    assert "CRCA_TASK_1_EXPECTED_ASSERTION_MISMATCH" in (
+        tmp_path / "run" / result.artifact_ref
+    ).read_text()
+
+
+def test_real_docker_boundary_has_only_loopback_and_no_model_key_when_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_value = manifest().model_copy(
+        update={
+            "test_command_id": "boundary-probe",
+            "docker_image": load_task_1_manifest().docker_image,
+        }
+    )
+    _require_docker_image(manifest_value.docker_image)
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    script = (
+        "import os; "
+        "assert sorted(os.listdir('/sys/class/net')) == ['lo']; "
+        "assert 'CODERCA_MODEL_API_KEY' not in os.environ; "
+        "print('BOUNDARY_OK')"
+    )
+    command = RegisteredTestCommand(
+        schema_version="1",
+        command_id="boundary-probe",
+        argv=("python", "-c", script),
+        timeout_seconds=10,
+    )
+    monkeypatch.setenv("CODERCA_MODEL_API_KEY", "must-not-enter-container")
+    runtime = ToolRuntime(
+        workspace,
+        manifest_value,
+        registered_test_command=command,
+        enforce_faulty_commit=False,
+    )
+
+    result = runtime.execute(
+        experiment("run_tests", {"test_command_id": "boundary-probe"}),
+        artifact_directory=tmp_path / "run" / "tool-results",
+    )
+
+    assert result.status == "success"
+    assert result.exit_code == 0
+    assert "BOUNDARY_OK" in result.output
+    assert "must-not-enter-container" not in result.output
+
+
+def _require_docker_image(image: str) -> None:
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("Docker executable is not installed")
+    inspected = subprocess.run(
+        [docker, "image", "inspect", image],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if inspected.returncode != 0:
+        pytest.skip(f"frozen Docker image is not available: {image}")
 
 
 def test_read_code_uses_registered_tool_spec_and_persists_bounded_result(
