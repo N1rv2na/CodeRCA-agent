@@ -231,6 +231,7 @@ def test_task_1_registered_command_is_fixed_argv_not_shell() -> None:
         "command_id": TASK_1_COMMAND_ID,
         "schema_version": "1",
         "timeout_seconds": 30,
+        "test_failure_exit_codes": [1],
     }
     assert "shell" not in command
 

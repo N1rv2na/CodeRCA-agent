@@ -121,6 +121,7 @@ class ToolRuntime:
     ) -> None:
         self.workspace_root = Path(workspace_root).resolve()
         self.manifest = manifest
+        self._enforce_faulty_commit = enforce_faulty_commit
         if not self.workspace_root.is_dir():
             raise ValueError("Tool Runtime workspace must be a directory")
         if enforce_faulty_commit:
@@ -433,11 +434,7 @@ class ToolRuntime:
         container_name = f"coderca-{uuid4().hex}"
         with tempfile.TemporaryDirectory(prefix="coderca-test-") as directory:
             execution_workspace = Path(directory) / "workspace"
-            shutil.copytree(
-                self.workspace_root,
-                execution_workspace,
-                symlinks=True,
-            )
+            self._materialize_execution_workspace(execution_workspace)
             docker_command = [
                 "docker",
                 "run",
@@ -466,7 +463,7 @@ class ToolRuntime:
                     timeout=timeout_seconds,
                 )
             except subprocess.TimeoutExpired as exc:
-                self._force_remove_container(container_name)
+                cleanup_error = self._force_remove_container(container_name)
                 partial = exc.output or ""
                 if isinstance(partial, bytes):
                     partial = partial.decode("utf-8", errors="replace")
@@ -475,9 +472,20 @@ class ToolRuntime:
                     exit_code=None,
                     output=partial,
                 )
+                category: ToolErrorCategory = (
+                    "timeout" if cleanup_error is None else "execution_failed"
+                )
+                message = (
+                    "registered test command exceeded its timeout"
+                    if cleanup_error is None
+                    else (
+                        "registered test command timed out, but container "
+                        f"termination could not be confirmed: {cleanup_error}"
+                    )
+                )
                 raise _ToolFailure(
-                    "timeout",
-                    "registered test command exceeded its timeout",
+                    category,
+                    message,
                     artifact_output=artifact,
                     command_id=command.command_id,
                 ) from exc
@@ -487,10 +495,14 @@ class ToolRuntime:
             exit_code=completed.returncode,
             output=completed.stdout or "",
         )
-        if completed.returncode in {125, 126, 127}:
+        successful_exit_codes = {0, *command.test_failure_exit_codes}
+        if completed.returncode not in successful_exit_codes:
             raise _ToolFailure(
                 "execution_failed",
-                f"Docker test execution failed with exit code {completed.returncode}",
+                (
+                    "registered test command could not produce a test outcome; "
+                    f"exit code {completed.returncode} is not registered"
+                ),
                 artifact_output=artifact,
                 command_id=command.command_id,
                 exit_code=completed.returncode,
@@ -513,10 +525,71 @@ class ToolRuntime:
             f"{output}"
         )
 
-    @staticmethod
-    def _force_remove_container(container_name: str) -> None:
+    def _materialize_execution_workspace(self, destination: Path) -> None:
+        if not self._enforce_faulty_commit:
+            # Explicit test seam. Production CLI construction always enforces the
+            # Manifest Faulty Commit and therefore uses the tracked-only path.
+            shutil.copytree(self.workspace_root, destination, symlinks=True)
+            return
+
         try:
-            subprocess.run(
+            self._verify_faulty_commit()
+            status = subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=no"],
+                cwd=self.workspace_root,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if status.stdout:
+                raise _ToolFailure(
+                    "permission_denied",
+                    "Faulty Commit workspace contains tracked modifications",
+                )
+            tracked = subprocess.run(
+                ["git", "ls-files", "-z"],
+                cwd=self.workspace_root,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except _ToolFailure:
+            raise
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise _ToolFailure(
+                "execution_failed",
+                "could not materialize the registered Faulty Commit workspace",
+            ) from exc
+
+        destination.mkdir(parents=True)
+        for value in tracked.stdout.split("\0"):
+            if not value:
+                continue
+            relative = Path(value)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise _ToolFailure(
+                    "permission_denied",
+                    "Git tracked path escapes the repository workspace",
+                )
+            source = self.workspace_root / relative
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_symlink():
+                target.symlink_to(source.readlink())
+            elif source.is_file():
+                shutil.copy2(source, target)
+            else:
+                raise _ToolFailure(
+                    "execution_failed",
+                    f"Git tracked path is not a materializable file: {value}",
+                )
+
+    @staticmethod
+    def _force_remove_container(container_name: str) -> str | None:
+        try:
+            completed = subprocess.run(
                 ["docker", "rm", "--force", container_name],
                 check=False,
                 stdout=subprocess.PIPE,
@@ -524,8 +597,11 @@ class ToolRuntime:
                 text=True,
                 timeout=5,
             )
-        except (OSError, subprocess.SubprocessError):
-            pass
+        except (OSError, subprocess.SubprocessError) as exc:
+            return type(exc).__name__
+        if completed.returncode != 0:
+            return (completed.stdout or "docker rm --force failed").strip()
+        return None
 
     @staticmethod
     def _read_file_text(path: Path) -> str:

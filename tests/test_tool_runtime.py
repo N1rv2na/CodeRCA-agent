@@ -340,6 +340,191 @@ def test_run_tests_classifies_docker_execution_failure(
     ).read_text()
 
 
+def test_run_tests_classifies_unregistered_nonzero_exit_as_execution_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    runtime = ToolRuntime(
+        workspace,
+        manifest(),
+        registered_test_command=registered_command(),
+        enforce_faulty_commit=False,
+    )
+
+    def collection_error(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        return subprocess.CompletedProcess(
+            command,
+            2,
+            stdout="ERROR: test collection failed\n",
+        )
+
+    monkeypatch.setattr("coderca.tool_runtime.subprocess.run", collection_error)
+
+    result = runtime.execute(
+        experiment("run_tests", {"test_command_id": "tests"}),
+        artifact_directory=tmp_path / "run" / "tool-results",
+    )
+
+    assert result.status == "error"
+    assert result.error_category == "execution_failed"
+    assert result.exit_code == 2
+
+
+def test_run_tests_reports_cleanup_failure_instead_of_claiming_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    runtime = ToolRuntime(
+        workspace,
+        manifest(),
+        registered_test_command=registered_command(timeout_seconds=1),
+        enforce_faulty_commit=False,
+    )
+
+    def timeout_then_failed_cleanup(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        if command[1] == "run":
+            raise subprocess.TimeoutExpired(command, timeout=1, output="partial\n")
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="cannot remove running container\n",
+        )
+
+    monkeypatch.setattr(
+        "coderca.tool_runtime.subprocess.run", timeout_then_failed_cleanup
+    )
+
+    result = runtime.execute(
+        experiment("run_tests", {"test_command_id": "tests"}),
+        artifact_directory=tmp_path / "run" / "tool-results",
+    )
+
+    assert result.status == "error"
+    assert result.error_category == "execution_failed"
+    assert "termination could not be confirmed" in (result.error_message or "")
+
+
+def test_run_tests_materializes_only_clean_tracked_faulty_commit_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = materialize_task_1(tmp_path / "workspace")
+    (workspace / ".env").write_text("CODERCA_MODEL_API_KEY=secret\n")
+    manifest_value = load_task_1_manifest()
+    command = load_registered_test_command(
+        TASK_1_DIRECTORY / "registered-command.json",
+        expected_command_id=manifest_value.test_command_id,
+    )
+    runtime = ToolRuntime(
+        workspace,
+        manifest_value,
+        registered_test_command=command,
+    )
+    real_run = subprocess.run
+
+    def inspect_materialized_workspace(
+        docker_command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        if docker_command[0] == "git":
+            return real_run(
+                docker_command,
+                cwd=workspace,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        mount = docker_command[docker_command.index("--mount") + 1]
+        source_value = next(
+            item.removeprefix("src=")
+            for item in mount.split(",")
+            if item.startswith("src=")
+        )
+        mounted_workspace = Path(source_value)
+        assert (mounted_workspace / "waffle" / "models.py").is_file()
+        assert not (mounted_workspace / ".env").exists()
+        assert not (mounted_workspace / ".git").exists()
+        return subprocess.CompletedProcess(
+            docker_command,
+            1,
+            stdout="expected failure\n",
+        )
+
+    monkeypatch.setattr(
+        "coderca.tool_runtime.subprocess.run", inspect_materialized_workspace
+    )
+
+    result = runtime.execute(
+        experiment(
+            "run_tests",
+            {"test_command_id": manifest_value.test_command_id},
+        ),
+        artifact_directory=tmp_path / "run" / "tool-results",
+    )
+
+    assert result.status == "success"
+    assert result.exit_code == 1
+
+
+def test_run_tests_rejects_tracked_workspace_changes_before_docker_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = materialize_task_1(tmp_path / "workspace")
+    manifest_value = load_task_1_manifest()
+    command = load_registered_test_command(
+        TASK_1_DIRECTORY / "registered-command.json",
+        expected_command_id=manifest_value.test_command_id,
+    )
+    runtime = ToolRuntime(
+        workspace,
+        manifest_value,
+        registered_test_command=command,
+    )
+    with (workspace / "waffle" / "models.py").open("a") as source:
+        source.write("\n# dirty workspace must not enter Docker\n")
+    docker_started = False
+    real_run = subprocess.run
+
+    def reject_docker(
+        command_line: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        nonlocal docker_started
+        if command_line[0] == "git":
+            return real_run(
+                command_line,
+                cwd=workspace,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        docker_started = True
+        raise AssertionError("Docker must not start for a dirty Faulty Commit")
+
+    monkeypatch.setattr("coderca.tool_runtime.subprocess.run", reject_docker)
+
+    result = runtime.execute(
+        experiment(
+            "run_tests",
+            {"test_command_id": manifest_value.test_command_id},
+        ),
+        artifact_directory=tmp_path / "run" / "tool-results",
+    )
+
+    assert result.status == "error"
+    assert result.error_category == "permission_denied"
+    assert docker_started is False
+
+
 def test_task_1_registered_command_runs_in_real_docker_when_image_is_available(
     tmp_path: Path,
 ) -> None:
@@ -412,6 +597,94 @@ def test_real_docker_boundary_has_only_loopback_and_no_model_key_when_available(
     assert result.exit_code == 0
     assert "BOUNDARY_OK" in result.output
     assert "must-not-enter-container" not in result.output
+
+
+@pytest.mark.parametrize(
+    ("script", "expected_status", "expected_category", "expected_exit_code"),
+    [
+        ("print('PASS')", "success", None, 0),
+        ("import sys; print('FAIL'); sys.exit(1)", "success", None, 1),
+        (
+            "import sys; print('COLLECTION_ERROR'); sys.exit(2)",
+            "error",
+            "execution_failed",
+            2,
+        ),
+    ],
+)
+def test_real_docker_classifies_registered_test_outcomes_when_available(
+    tmp_path: Path,
+    script: str,
+    expected_status: str,
+    expected_category: str | None,
+    expected_exit_code: int,
+) -> None:
+    image = load_task_1_manifest().docker_image
+    _require_docker_image(image)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    command = RegisteredTestCommand(
+        schema_version="1",
+        command_id="docker-outcome-probe",
+        argv=("python", "-c", script),
+        timeout_seconds=10,
+    )
+    manifest_value = manifest().model_copy(
+        update={
+            "test_command_id": command.command_id,
+            "docker_image": image,
+        }
+    )
+    runtime = ToolRuntime(
+        workspace,
+        manifest_value,
+        registered_test_command=command,
+        enforce_faulty_commit=False,
+    )
+
+    result = runtime.execute(
+        experiment("run_tests", {"test_command_id": command.command_id}),
+        artifact_directory=tmp_path / "run" / "tool-results",
+    )
+
+    assert result.status == expected_status
+    assert result.error_category == expected_category
+    assert result.exit_code == expected_exit_code
+
+
+def test_real_docker_timeout_terminates_named_container_when_available(
+    tmp_path: Path,
+) -> None:
+    image = load_task_1_manifest().docker_image
+    _require_docker_image(image)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    command = RegisteredTestCommand(
+        schema_version="1",
+        command_id="docker-timeout-probe",
+        argv=("python", "-c", "import time; time.sleep(30)"),
+        timeout_seconds=1,
+    )
+    manifest_value = manifest().model_copy(
+        update={
+            "test_command_id": command.command_id,
+            "docker_image": image,
+        }
+    )
+    runtime = ToolRuntime(
+        workspace,
+        manifest_value,
+        registered_test_command=command,
+        enforce_faulty_commit=False,
+    )
+
+    result = runtime.execute(
+        experiment("run_tests", {"test_command_id": command.command_id}),
+        artifact_directory=tmp_path / "run" / "tool-results",
+    )
+
+    assert result.status == "error"
+    assert result.error_category == "timeout"
 
 
 def _require_docker_image(image: str) -> None:

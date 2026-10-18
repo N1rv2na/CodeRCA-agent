@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
+TestFailureExitCode = Annotated[int, Field(ge=1, le=124)]
 DiagnosisFailureCategory = Literal["schema_failure", "infrastructure_failure"]
 DiagnosisStopReason = (
     DiagnosisFailureCategory
@@ -90,6 +91,15 @@ class RegisteredTestCommand(ContractModel):
     command_id: NonEmptyString
     argv: tuple[NonEmptyString, ...] = Field(min_length=1)
     timeout_seconds: int = Field(ge=1, le=300)
+    test_failure_exit_codes: tuple[TestFailureExitCode, ...] = (1,)
+
+    @model_validator(mode="after")
+    def require_unique_test_failure_exit_codes(self) -> RegisteredTestCommand:
+        if len(set(self.test_failure_exit_codes)) != len(
+            self.test_failure_exit_codes
+        ):
+            raise ValueError("test failure exit codes must be unique")
+        return self
 
 
 class EvaluationGroundTruth(ContractModel):
