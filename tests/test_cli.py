@@ -240,6 +240,7 @@ def test_cli_workspace_runs_the_patch_validation_loop(
         "inspect_diff",
         "read_code",
         "run_tests",
+        "search_code",
     ]
 
 

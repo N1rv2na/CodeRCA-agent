@@ -461,6 +461,7 @@ def test_run_tests_uses_isolated_networkless_workspace_and_preserves_output(
         "inspect_diff",
         "read_code",
         "run_tests",
+        "search_code",
     ]
     docker_commands: list[list[str]] = []
     mounted_workspaces: list[Path] = []
@@ -1089,7 +1090,12 @@ def test_read_code_uses_registered_tool_spec_and_persists_bounded_result(
         artifact_directory=tmp_path / "run" / "tool-results",
     )
 
-    assert set(runtime.tool_specs) == {"apply_patch", "inspect_diff", "read_code"}
+    assert set(runtime.tool_specs) == {
+        "apply_patch",
+        "inspect_diff",
+        "read_code",
+        "search_code",
+    }
     assert runtime.tool_specs["read_code"].permission == "read_only"
     assert runtime.tool_specs["read_code"].input_schema["type"] == "object"
     assert runtime.tool_specs["read_code"].output_schema["type"] == "object"
@@ -1115,7 +1121,11 @@ def test_runtime_projects_a_deterministic_safe_tool_catalog(tmp_path: Path) -> N
 
     catalog = runtime.available_tool_catalog()
 
-    assert [item["name"] for item in catalog] == ["inspect_diff", "read_code"]
+    assert [item["name"] for item in catalog] == [
+        "inspect_diff",
+        "read_code",
+        "search_code",
+    ]
     assert catalog[0]["input_schema"]["type"] == "object"
     assert catalog[1]["permission"] == "read_only"
     assert catalog[1]["side_effects"] == "none"

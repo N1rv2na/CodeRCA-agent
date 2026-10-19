@@ -633,6 +633,85 @@ def test_task_1_read_only_loop_reports_supported_root_cause_from_real_diff(
     assert "if self.everyone is not None" in artifact.read_text()
 
 
+def test_search_code_flows_through_existing_observation_and_evidence_pipeline(
+    tmp_path: Path, valid_manifest_data: dict[str, object]
+) -> None:
+    workspace = tmp_path / "workspace"
+    source = workspace / "src" / "flags.py"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "def is_active(value):\n    return value or True\n",
+        encoding="utf-8",
+    )
+    manifest_data = dict(valid_manifest_data)
+    manifest_data["read_paths"] = ["src/"]
+    task = resolved_task(manifest_data)
+    provider = FakeModelProvider(
+        {
+            "form_hypothesis": {
+                "hypothesis": proposal_payload("flags.is_active")
+            },
+            "select_experiment": {
+                "hypothesis_id": "H1",
+                "purpose": "Find the implementation named by H1.",
+                "expected_observation": "The source contains is_active.",
+                "falsification_relevance": (
+                    "No implementation match would weaken the proposed location."
+                ),
+                "tool_name": "search_code",
+                "arguments": {
+                    "query": "is_active",
+                    "search_kind": "content",
+                    "max_results": 5,
+                    "context_lines": 1,
+                },
+            },
+            "update_evidence": {
+                "hypothesis_id": "H1",
+                "observation_ref": "O1",
+                "direction": "supporting",
+                "explanation": (
+                    "The bounded search Observation locates the predicted function."
+                ),
+            },
+            "assess_hypothesis": {
+                "outcome": "sufficiently_supported",
+                "evidence_refs": ["E1"],
+                "rationale": "E1 links H1 to repository code.",
+            },
+        }
+    )
+    runtime = ToolRuntime(
+        workspace,
+        task.manifest,
+        enforce_faulty_commit=False,
+    )
+
+    result = DiagnosisApplicationService(
+        provider=provider,
+        run_store=RunStore(tmp_path / "runs"),
+        tool_runtime=runtime,
+    ).start_diagnosis(task)
+
+    assert result.status == "completed"
+    assert result.stop_reason == "read_only_diagnosis_complete"
+    assert result.observations[0].source == "search_code"
+    assert result.observations[0].tool_result_ref == "T1"
+    assert '"status": "matched"' in result.observations[0].excerpt
+    assert result.evidence[0].observation_ref == "O1"
+    assert result.evidence[0].provenance == "search_code:tool-results/T1.txt"
+    assert (result.run_directory / "tool-results/T1.txt").is_file()
+    select_request = next(
+        request
+        for request in provider.structured_requests
+        if request["schema_name"] == "select_experiment"
+    )
+    select_context = json.loads(select_request["user_prompt"])
+    assert "search_code" in {
+        tool["name"] for tool in select_context["available_tools"]
+    }
+
+
 def test_rejected_h1_reformulates_h2_from_registered_evidence(
     tmp_path: Path,
 ) -> None:
@@ -886,6 +965,7 @@ def test_unknown_tool_selection_is_corrected_before_budget_or_runtime_execution(
     assert [item["name"] for item in first_context["available_tools"]] == [
         "inspect_diff",
         "read_code",
+        "search_code",
     ]
     assert corrected_context["schema_correction"]["validation_errors"][0][
         "loc"

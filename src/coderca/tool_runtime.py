@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -14,7 +15,14 @@ from time import monotonic
 from typing import Any, Callable, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from .contracts import (
     DecisionValidationError,
@@ -31,6 +39,26 @@ from .contracts import (
 
 _MAX_READ_LINES = 200
 _DEFAULT_RESULT_LIMIT = 12_000
+_MAX_SEARCH_QUERY_LENGTH = 200
+_MAX_SEARCH_PATH_LENGTH = 500
+_MAX_SEARCH_RESULTS = 20
+_MAX_SEARCH_CONTEXT_LINES = 5
+_MAX_SEARCH_SNIPPET_LENGTH = 2_000
+_SEARCH_ANSWER_NAMES = frozenset(
+    {
+        "answer",
+        "answers",
+        "fixed",
+        "fixed_code",
+        "ground-truth",
+        "ground_truth",
+        "reference-patch",
+        "reference_patch",
+        "repaired",
+        "repaired_code",
+        "solution",
+    }
+)
 
 
 def load_registered_test_command(
@@ -75,6 +103,53 @@ class ReadCodeArguments(ToolArguments):
         return self
 
 
+class SearchCodeInput(ToolArguments):
+    query: str = Field(min_length=1, max_length=_MAX_SEARCH_QUERY_LENGTH)
+    search_kind: Literal["content", "path"]
+    path: str | None = Field(
+        default=None, min_length=1, max_length=_MAX_SEARCH_PATH_LENGTH
+    )
+    max_results: int = Field(default=10, ge=1, le=_MAX_SEARCH_RESULTS)
+    context_lines: int = Field(default=2, ge=0, le=_MAX_SEARCH_CONTEXT_LINES)
+
+    @field_validator("query")
+    @classmethod
+    def validate_literal_query(cls, value: str) -> str:
+        if any(character in value for character in ("\0", "\r", "\n")):
+            raise ValueError("query must be one bounded literal line")
+        return value
+
+    @field_validator("path")
+    @classmethod
+    def validate_path_scope(cls, value: str | None) -> str | None:
+        if value is not None and any(
+            character in value for character in ("\0", "\r", "\n")
+        ):
+            raise ValueError("path must be one bounded repository-relative path")
+        return value
+
+
+class SearchMatch(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    path: str
+    start_line: int | None = Field(default=None, ge=1)
+    end_line: int | None = Field(default=None, ge=1)
+    snippet: str
+    truncated: bool
+
+
+class SearchCodeResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    query: str
+    search_kind: Literal["content", "path"]
+    path: str | None
+    status: Literal["matched", "no_matches"]
+    matches: tuple[SearchMatch, ...]
+    truncated: bool
+
+
 class RunTestsArguments(ToolArguments):
     test_command_id: str = Field(min_length=1)
 
@@ -89,6 +164,7 @@ class ApplyPatchArguments(ToolArguments):
 @dataclass(frozen=True)
 class _ToolExecutionOutput:
     content: str
+    artifact_content: str | None = None
     command_id: str | None = None
     exit_code: int | None = None
 
@@ -182,6 +258,28 @@ class ToolRuntime:
                     "execution_failed",
                 ),
                 handler=self._read_code,
+            ),
+            "search_code": ToolSpec(
+                name="search_code",
+                version="1",
+                description=(
+                    "Search repository code or paths using bounded literal "
+                    "matching. Results discover locations; they do not assert "
+                    "a Root Symbol or Evidence direction."
+                ),
+                input_model=SearchCodeInput,
+                output_model=SearchCodeResult,
+                permission="read_only",
+                timeout_seconds=10,
+                result_limit=_DEFAULT_RESULT_LIMIT,
+                side_effects="none",
+                error_categories=(
+                    "invalid_arguments",
+                    "permission_denied",
+                    "timeout",
+                    "execution_failed",
+                ),
+                handler=self._search_code,
             ),
             "apply_patch": ToolSpec(
                 name="apply_patch",
@@ -506,6 +604,7 @@ class ToolRuntime:
         error_category: ToolErrorCategory | None = None
         error_message: str | None = None
         output = ""
+        artifact_output: str | None = None
         command_id: str | None = None
         exit_code: int | None = None
         result_limit = _DEFAULT_RESULT_LIMIT
@@ -527,6 +626,7 @@ class ToolRuntime:
             handler_result = spec.handler(arguments, spec.timeout_seconds)
             if isinstance(handler_result, _ToolExecutionOutput):
                 output = handler_result.content
+                artifact_output = handler_result.artifact_content
                 command_id = handler_result.command_id
                 exit_code = handler_result.exit_code
             else:
@@ -547,7 +647,7 @@ class ToolRuntime:
             error_category = "execution_failed"
             error_message = f"tool execution failed: {type(exc).__name__}"
 
-        full_artifact = output
+        full_artifact = artifact_output if artifact_output is not None else output
         if error_category is not None and not full_artifact:
             full_artifact = error_message or ""
         artifact_directory = Path(artifact_directory)
@@ -564,7 +664,7 @@ class ToolRuntime:
             status="success" if error_category is None else "error",
             output=bounded_output,
             artifact_ref=artifact_ref,
-            truncated=len(output) > len(bounded_output),
+            truncated=len(full_artifact) > len(bounded_output),
             duration_ms=max(int((monotonic() - started) * 1_000), 0),
             error_category=error_category,
             error_message=error_message,
@@ -636,6 +736,354 @@ class ToolRuntime:
             f"{line_number}: {line}\n"
             for line_number, line in enumerate(selected, arguments.start_line)
         )
+
+    def _search_code(
+        self, raw: BaseModel, timeout_seconds: float
+    ) -> _ToolExecutionOutput:
+        arguments = SearchCodeInput.model_validate(raw.model_dump())
+        deadline = monotonic() + timeout_seconds
+        scopes = self._search_scopes(arguments.path)
+        self._check_search_deadline(deadline)
+        files = self._searchable_files(scopes, deadline=deadline)
+        if arguments.search_kind == "content":
+            matches, truncated = self._search_content(
+                arguments,
+                files,
+                max(deadline - monotonic(), 0.001),
+            )
+        else:
+            matches, truncated = self._search_paths(
+                arguments, files, deadline=deadline
+            )
+        self._check_search_deadline(deadline)
+        result = SearchCodeResult(
+            query=arguments.query,
+            search_kind=arguments.search_kind,
+            path=arguments.path,
+            status="matched" if matches else "no_matches",
+            matches=tuple(matches),
+            truncated=truncated,
+        )
+        full_output = self._serialize_search_result(result)
+        if len(full_output) <= _DEFAULT_RESULT_LIMIT:
+            return _ToolExecutionOutput(content=full_output)
+
+        bounded_matches: list[SearchMatch] = []
+        for match in result.matches:
+            candidate = result.model_copy(
+                update={
+                    "matches": tuple([*bounded_matches, match]),
+                    "truncated": True,
+                }
+            )
+            serialized = self._serialize_search_result(candidate)
+            if len(serialized) > _DEFAULT_RESULT_LIMIT:
+                break
+            bounded_matches.append(match)
+        bounded_result = result.model_copy(
+            update={"matches": tuple(bounded_matches), "truncated": True}
+        )
+        return _ToolExecutionOutput(
+            content=self._serialize_search_result(bounded_result),
+            artifact_content=full_output,
+        )
+
+    @staticmethod
+    def _serialize_search_result(result: SearchCodeResult) -> str:
+        return json.dumps(result.model_dump(mode="json"), sort_keys=True)
+
+    def _search_content(
+        self,
+        arguments: SearchCodeInput,
+        files: list[str],
+        timeout_seconds: float,
+    ) -> tuple[list[SearchMatch], bool]:
+        if not files:
+            return [], False
+        deadline = monotonic() + timeout_seconds
+        discovered: list[tuple[str, int]] = []
+        for relative_path in files:
+            self._check_search_deadline(deadline)
+            remaining = arguments.max_results + 1 - len(discovered)
+            command = [
+                "rg",
+                "--no-config",
+                "--json",
+                "--fixed-strings",
+                "--line-number",
+                "--max-count",
+                str(remaining),
+                "--max-columns",
+                str(_MAX_SEARCH_SNIPPET_LENGTH),
+                "--",
+                arguments.query,
+                relative_path,
+            ]
+            completed = subprocess.run(
+                command,
+                cwd=self.workspace_root,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=max(deadline - monotonic(), 0.001),
+            )
+            if completed.returncode == 1:
+                continue
+            if completed.returncode != 0:
+                raise _ToolFailure(
+                    "execution_failed",
+                    "ripgrep content search failed",
+                    artifact_output=completed.stderr,
+                )
+            try:
+                for line in completed.stdout.splitlines():
+                    event = json.loads(line)
+                    if event.get("type") != "match":
+                        continue
+                    data = event["data"]
+                    path = data["path"].get("text")
+                    line_number = data.get("line_number")
+                    if isinstance(path, str) and isinstance(line_number, int):
+                        discovered.append((Path(path).as_posix(), line_number))
+            except (KeyError, TypeError, json.JSONDecodeError) as exc:
+                raise _ToolFailure(
+                    "execution_failed", "ripgrep returned an invalid result stream"
+                ) from exc
+            if len(discovered) > arguments.max_results:
+                break
+
+        truncated = len(discovered) > arguments.max_results
+        matches = [
+            self._content_search_match(
+                path,
+                line_number,
+                context_lines=arguments.context_lines,
+            )
+            for path, line_number in discovered[: arguments.max_results]
+        ]
+        return matches, truncated or any(match.truncated for match in matches)
+
+    def _search_paths(
+        self,
+        arguments: SearchCodeInput,
+        files: list[str],
+        *,
+        deadline: float,
+    ) -> tuple[list[SearchMatch], bool]:
+        matching_paths: list[str] = []
+        for path in files:
+            self._check_search_deadline(deadline)
+            if arguments.query in path:
+                matching_paths.append(path)
+        truncated = len(matching_paths) > arguments.max_results
+        matches: list[SearchMatch] = []
+        for path in matching_paths[: arguments.max_results]:
+            matches.append(
+                SearchMatch(
+                    path=path,
+                    snippet="",
+                    truncated=False,
+                )
+            )
+        return matches, truncated
+
+    def _content_search_match(
+        self, relative_path: str, line_number: int, *, context_lines: int
+    ) -> SearchMatch:
+        path = self._safe_search_file(relative_path)
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError) as exc:
+            raise _ToolFailure(
+                "execution_failed", "matched repository file is not readable text"
+            ) from exc
+        start_line = max(line_number - context_lines, 1)
+        end_line = min(line_number + context_lines, max(len(lines), 1))
+        selected = lines[start_line - 1 : end_line]
+        snippet = "".join(
+            f"{number}: {line}\n"
+            for number, line in enumerate(selected, start_line)
+        )
+        bounded = snippet[:_MAX_SEARCH_SNIPPET_LENGTH]
+        return SearchMatch(
+            path=relative_path,
+            start_line=start_line,
+            end_line=end_line,
+            snippet=bounded,
+            truncated=len(snippet) > len(bounded),
+        )
+
+    def _search_scopes(self, requested_path: str | None) -> list[str]:
+        raw_scopes = (
+            [requested_path] if requested_path is not None else self.manifest.read_paths
+        )
+        scopes: list[str] = []
+        for value in raw_scopes:
+            normalized = self._authorized_relative_path(value)
+            self._reject_answer_material(normalized)
+            unresolved = self.workspace_root / normalized
+            current = self.workspace_root
+            for part in Path(normalized).parts:
+                current /= part
+                if current.is_symlink():
+                    raise _ToolFailure(
+                        "permission_denied", "symbolic links are not searchable"
+                    )
+            resolved = unresolved.resolve()
+            try:
+                resolved.relative_to(self.workspace_root)
+            except ValueError as exc:
+                raise _ToolFailure(
+                    "permission_denied", "search path escapes the repository workspace"
+                ) from exc
+            if not resolved.exists():
+                raise _ToolFailure(
+                    "permission_denied", "search path is not present in the workspace"
+                )
+            scopes.append(normalized)
+        return scopes
+
+    def _searchable_files(
+        self, scopes: list[str], *, deadline: float
+    ) -> list[str]:
+        if self._enforce_faulty_commit:
+            return self._tracked_searchable_files(scopes, deadline=deadline)
+        files: set[str] = set()
+        for scope in scopes:
+            self._check_search_deadline(deadline)
+            path = self.workspace_root / scope
+            if path.is_file():
+                relative = path.relative_to(self.workspace_root).as_posix()
+                if not self._is_answer_material(relative) and not path.is_symlink():
+                    files.add(relative)
+                continue
+            for root, directories, names in os.walk(path, followlinks=False):
+                self._check_search_deadline(deadline)
+                root_path = Path(root)
+                directories[:] = sorted(
+                    directory
+                    for directory in directories
+                    if not (root_path / directory).is_symlink()
+                    and not self._is_answer_material(
+                        (root_path / directory)
+                        .relative_to(self.workspace_root)
+                        .as_posix()
+                    )
+                )
+                for name in sorted(names):
+                    self._check_search_deadline(deadline)
+                    candidate = root_path / name
+                    relative = candidate.relative_to(self.workspace_root).as_posix()
+                    if candidate.is_symlink() or self._is_answer_material(relative):
+                        continue
+                    if candidate.is_file():
+                        files.add(relative)
+        return sorted(files)
+
+    def _tracked_searchable_files(
+        self, scopes: list[str], *, deadline: float
+    ) -> list[str]:
+        self._check_search_deadline(deadline)
+        timeout_seconds = max(deadline - monotonic(), 0.001)
+        try:
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=self.workspace_root,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+            if head.stdout.strip() != self.manifest.faulty_commit:
+                raise _ToolFailure(
+                    "permission_denied",
+                    "workspace is no longer at the Faulty Commit",
+                )
+            status = subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=no"],
+                cwd=self.workspace_root,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=max(deadline - monotonic(), 0.001),
+            )
+            if status.stdout:
+                raise _ToolFailure(
+                    "permission_denied",
+                    "Faulty Commit workspace contains tracked modifications",
+                )
+            tracked = subprocess.run(
+                ["git", "ls-files", "-z", "--", *scopes],
+                cwd=self.workspace_root,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=max(deadline - monotonic(), 0.001),
+            )
+        except _ToolFailure:
+            raise
+        except subprocess.TimeoutExpired:
+            raise
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise _ToolFailure(
+                "execution_failed",
+                "could not enumerate the Faulty Commit search files",
+            ) from exc
+
+        files: list[str] = []
+        for value in tracked.stdout.split("\0"):
+            if not value:
+                continue
+            self._check_search_deadline(deadline)
+            normalized = Path(value).as_posix()
+            if self._is_answer_material(normalized):
+                continue
+            path = self.workspace_root / normalized
+            if path.is_symlink() or not path.is_file():
+                continue
+            self._authorized_relative_path(normalized)
+            files.append(normalized)
+        return sorted(files)
+
+    @staticmethod
+    def _check_search_deadline(deadline: float) -> None:
+        if monotonic() >= deadline:
+            raise TimeoutError("search_code exceeded its timeout")
+
+    def _safe_search_file(self, relative_path: str) -> Path:
+        normalized = self._authorized_relative_path(relative_path)
+        self._reject_answer_material(normalized)
+        path = self.workspace_root / normalized
+        current = self.workspace_root
+        for part in Path(normalized).parts:
+            current /= part
+            if current.is_symlink():
+                raise _ToolFailure(
+                    "permission_denied", "symbolic links are not searchable"
+                )
+        if not path.is_file():
+            raise _ToolFailure(
+                "permission_denied", "matched path is not a repository file"
+            )
+        return path
+
+    def _reject_answer_material(self, relative_path: str) -> None:
+        if self._is_answer_material(relative_path):
+            raise _ToolFailure(
+                "permission_denied", "answer and reference material is not searchable"
+            )
+
+    @staticmethod
+    def _is_answer_material(relative_path: str) -> bool:
+        for part in Path(relative_path).parts:
+            lowered = part.casefold()
+            stem = Path(lowered).stem
+            if (
+                lowered in {"reference.patch", "reference.diff"}
+                or stem in _SEARCH_ANSWER_NAMES
+            ):
+                return True
+        return False
 
     def _run_tests(
         self, raw: BaseModel, timeout_seconds: float
