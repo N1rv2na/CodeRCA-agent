@@ -22,7 +22,11 @@ from .contracts import (
     Experiment,
     FormHypothesisDecision,
     HypothesisAssessmentDecision,
+    PatchDecision,
+    PatchValidationAction,
+    PublicValidationResult,
     ReformulateHypothesisDecision,
+    ReportDecision,
     RunArtifacts,
     SelectExperimentDecision,
     TaskManifest,
@@ -173,7 +177,7 @@ class DiagnosisApplicationService:
             )
         )
         if self.tool_runtime is not None:
-            return self._run_read_only_loop(
+            return self._run_diagnosis_loop(
                 task=task,
                 run_id=run_id,
                 artifacts=artifacts,
@@ -203,7 +207,7 @@ class DiagnosisApplicationService:
             report_path=artifacts.report_path,
         )
 
-    def _run_read_only_loop(
+    def _run_diagnosis_loop(
         self,
         *,
         task: DiagnosisTaskContext,
@@ -213,7 +217,7 @@ class DiagnosisApplicationService:
         events: list[DiagnosisEvent],
     ) -> DiagnosisRunResult:
         try:
-            return self._run_read_only_loop_unchecked(
+            return self._run_diagnosis_loop_unchecked(
                 task=task,
                 run_id=run_id,
                 artifacts=artifacts,
@@ -245,7 +249,7 @@ class DiagnosisApplicationService:
                 ],
             )
 
-    def _run_read_only_loop_unchecked(
+    def _run_diagnosis_loop_unchecked(
         self,
         *,
         task: DiagnosisTaskContext,
@@ -257,17 +261,17 @@ class DiagnosisApplicationService:
         model_sequence = 1
         runtime = self.tool_runtime
         if runtime is None:  # guarded by start_diagnosis
-            raise RuntimeError("read-only diagnosis requires a Tool Runtime")
+            raise RuntimeError("diagnosis requires a Tool Runtime")
         while True:
             if state.tool_budget_exhausted:
-                return self._finalize_read_only(
+                return self._finalize_diagnosis(
                     task=task,
                     run_id=run_id,
                     artifacts=artifacts,
                     state=state,
                     events=events,
                     stop_reason="tool_budget_exhausted",
-                    summary="Read-only diagnosis stopped after exhausting Tool Budget.",
+                    summary="Diagnosis stopped after exhausting Tool Budget.",
                 )
             select_context = ContextBuilder().build_select_experiment(
                 task,
@@ -331,7 +335,7 @@ class DiagnosisApplicationService:
                 )
             )
             if tool_result.status == "error":
-                return self._finalize_read_only(
+                return self._finalize_diagnosis(
                     task=task,
                     run_id=run_id,
                     artifacts=artifacts,
@@ -339,7 +343,7 @@ class DiagnosisApplicationService:
                     events=events,
                     stop_reason="tool_failure",
                     summary=(
-                        "Read-only diagnosis stopped after "
+                        "Diagnosis stopped after "
                         f"{tool_result.error_category}."
                     ),
                     failed=True,
@@ -426,7 +430,30 @@ class DiagnosisApplicationService:
                 )
             )
             if assessed_hypothesis.status == "supported":
-                return self._finalize_read_only(
+                if runtime.registered_test_command is not None:
+                    if state.tool_budget_exhausted:
+                        return self._finalize_diagnosis(
+                            task=task,
+                            run_id=run_id,
+                            artifacts=artifacts,
+                            state=state,
+                            events=events,
+                            stop_reason="tool_budget_exhausted",
+                            summary=(
+                                "Diagnosis supported a Hypothesis but exhausted "
+                                "Tool Budget before Patch Validation."
+                            ),
+                        )
+                    return self._run_patch_validation(
+                        task=task,
+                        run_id=run_id,
+                        artifacts=artifacts,
+                        state=state,
+                        events=events,
+                        runtime=runtime,
+                        model_sequence=model_sequence,
+                    )
+                return self._finalize_diagnosis(
                     task=task,
                     run_id=run_id,
                     artifacts=artifacts,
@@ -440,14 +467,14 @@ class DiagnosisApplicationService:
                 )
             if assessed_hypothesis.status in {"rejected", "inconclusive"}:
                 if state.hypothesis_budget_exhausted:
-                    return self._finalize_read_only(
+                    return self._finalize_diagnosis(
                         task=task,
                         run_id=run_id,
                         artifacts=artifacts,
                         state=state,
                         events=events,
                         stop_reason="hypothesis_budget_exhausted",
-                        summary="Read-only diagnosis exhausted H1-H3.",
+                        summary="Diagnosis exhausted H1-H3.",
                     )
                 state.begin_hypothesis_formation()
                 reformulation_context = ContextBuilder().build_form_hypothesis(
@@ -490,6 +517,236 @@ class DiagnosisApplicationService:
                         model_response_artifact=reformulation_artifact,
                     )
                 )
+
+    def _run_patch_validation(
+        self,
+        *,
+        task: DiagnosisTaskContext,
+        run_id: str,
+        artifacts: RunArtifacts,
+        state: DiagnosisStateMachine,
+        events: list[DiagnosisEvent],
+        runtime: ToolRuntime,
+        model_sequence: int,
+    ) -> DiagnosisRunResult:
+        supported = state.supported_hypothesis
+        if supported is None:
+            raise InvalidDiagnosisTransition(
+                "Patch generation requires one supported Hypothesis"
+            )
+        validation_context = ContextBuilder().build_validation(
+            task,
+            state,
+            observations=list(state.observations),
+            evidence=list(state.evidence),
+        )
+
+        def validate_binding(value: PatchDecision) -> None:
+            if value.hypothesis_id != supported.hypothesis_id:
+                raise DecisionValidationError(
+                    "Patch must bind the supported Hypothesis",
+                    [
+                        {
+                            "loc": ["hypothesis_id"],
+                            "type": "wrong_hypothesis",
+                            "msg": "Patch does not bind the supported Hypothesis.",
+                            "input": value.hypothesis_id,
+                            "allowed_hypothesis_id": supported.hypothesis_id,
+                        }
+                    ],
+                )
+
+        generated, patch_artifact, model_sequence = self._request_loop_decision(
+            task=task,
+            run_id=run_id,
+            state=state,
+            events=events,
+            artifacts=artifacts,
+            schema_name="generate_patch",
+            system_prompt=(
+                "Generate exactly one unified diff for the supported Hypothesis. "
+                "Modify only one permitted business source file and return only "
+                "the requested structured object."
+            ),
+            context=validation_context,
+            response_model=PatchDecision,
+            model_sequence=model_sequence,
+            decision_validator=validate_binding,
+        )
+        patch = generated.value
+        validation_action = PatchValidationAction(
+            validation_action_id="V1",
+            hypothesis_id=patch.hypothesis_id,
+            purpose="Apply the candidate patch and run Public Validation.",
+            tool_name="apply_patch",
+            arguments={
+                "target_path": patch.target_path,
+                "unified_diff": patch.unified_diff,
+            },
+        )
+        state.begin_validation(validation_action)
+        events.append(
+            DiagnosisEvent(
+                sequence=len(events) + 1,
+                event_type="patch_generated",
+                run_id=run_id,
+                task_id=task.manifest.task_id,
+                stage=state.stage,
+                message=(
+                    f"Generated one candidate patch for {patch.hypothesis_id}."
+                ),
+                hypothesis_history=list(state.hypothesis_history),
+                model_response_artifact=patch_artifact,
+                patch=patch,
+                validation_action=validation_action,
+            )
+        )
+        patch_tool_result, validation = runtime.execute_patch_validation(
+            validation_action,
+            patch,
+            artifact_directory=artifacts.run_directory,
+        )
+        validation_observation, validation_evidence = state.record_public_validation(
+            validation,
+            validation_action,
+            patch_tool_result,
+        )
+        events.append(
+            DiagnosisEvent(
+                sequence=len(events) + 1,
+                event_type="validation_completed",
+                run_id=run_id,
+                task_id=task.manifest.task_id,
+                stage=state.stage,
+                message=f"Public Validation {validation.status}.",
+                hypothesis_history=list(state.hypothesis_history),
+                patch=patch,
+                validation=validation,
+                observation=validation_observation,
+                evidence=validation_evidence,
+                validation_action=validation_action,
+                tool_result=patch_tool_result,
+            )
+        )
+        report_context = ContextBuilder().build_validation(
+            task,
+            state,
+            observations=list(state.observations),
+            evidence=list(state.evidence),
+        )
+        report_context["candidate_patch"] = patch.model_dump(mode="json")
+        report_context["public_validation"] = validation.model_dump(mode="json")
+        generated_report, report_artifact, _ = self._request_loop_decision(
+            task=task,
+            run_id=run_id,
+            state=state,
+            events=events,
+            artifacts=artifacts,
+            schema_name="generate_report",
+            system_prompt=(
+                "Complete the causal fields for the final Root Cause Report from "
+                "the supported Hypothesis, registered Evidence, candidate patch, "
+                "and Public Validation. Return only the requested object."
+            ),
+            context=report_context,
+            response_model=ReportDecision,
+            model_sequence=model_sequence,
+        )
+        root_cause_analysis = generated_report.value
+        events.append(
+            DiagnosisEvent(
+                sequence=len(events) + 1,
+                event_type="report_generated",
+                run_id=run_id,
+                task_id=task.manifest.task_id,
+                stage=state.stage,
+                message="Generated the final Root Cause Report causal fields.",
+                hypothesis_history=list(state.hypothesis_history),
+                model_response_artifact=report_artifact,
+                patch=patch,
+                validation=validation,
+                root_cause_analysis=root_cause_analysis,
+            )
+        )
+        return self._finalize_validation(
+            task=task,
+            run_id=run_id,
+            artifacts=artifacts,
+            state=state,
+            events=events,
+            patch=patch,
+            validation=validation,
+            root_cause_analysis=root_cause_analysis,
+        )
+
+    def _finalize_validation(
+        self,
+        *,
+        task: DiagnosisTaskContext,
+        run_id: str,
+        artifacts: RunArtifacts,
+        state: DiagnosisStateMachine,
+        events: list[DiagnosisEvent],
+        patch: PatchDecision,
+        validation: PublicValidationResult,
+        root_cause_analysis: ReportDecision,
+    ) -> DiagnosisRunResult:
+        state.transition_to(DiagnosisStage.FINALIZING)
+        stop_reason: DiagnosisStopReason = (
+            "validation_passed"
+            if validation.status == "passed"
+            else "validation_failed"
+        )
+        summary = f"Public Validation {validation.status} for {patch.hypothesis_id}."
+        events.append(
+            DiagnosisEvent(
+                sequence=len(events) + 1,
+                event_type="run_completed",
+                run_id=run_id,
+                task_id=task.manifest.task_id,
+                stage=state.stage,
+                message=summary,
+                hypothesis_history=list(state.hypothesis_history),
+                patch=patch,
+                validation=validation,
+                root_cause_analysis=root_cause_analysis,
+            )
+        )
+        report = DiagnosisReport(
+            run_id=run_id,
+            task_id=task.manifest.task_id,
+            stage=state.stage,
+            status="completed",
+            stop_reason=stop_reason,
+            summary=summary,
+            hypothesis_history=list(state.hypothesis_history),
+            final_hypothesis=state.supported_hypothesis,
+            observations=list(state.observations),
+            evidence=list(state.evidence),
+            patch=patch,
+            validation=validation,
+            root_cause_analysis=root_cause_analysis,
+        )
+        self.run_store.write_events(artifacts, events)
+        self.run_store.write_report(artifacts, report)
+        return DiagnosisRunResult(
+            run_id=run_id,
+            task_id=task.manifest.task_id,
+            stage=state.stage,
+            status="completed",
+            stop_reason=stop_reason,
+            summary=summary,
+            hypothesis_history=state.hypothesis_history,
+            observations=state.observations,
+            evidence=state.evidence,
+            patch=patch,
+            validation=validation,
+            root_cause_analysis=root_cause_analysis,
+            run_directory=artifacts.run_directory,
+            manifest_path=artifacts.manifest_path,
+            events_path=artifacts.events_path,
+            report_path=artifacts.report_path,
+        )
 
     def _request_loop_decision(
         self,
@@ -586,7 +843,7 @@ class DiagnosisApplicationService:
             return response, artifact, model_sequence
         raise RuntimeError("structured decision correction loop exhausted")
 
-    def _finalize_read_only(
+    def _finalize_diagnosis(
         self,
         *,
         task: DiagnosisTaskContext,

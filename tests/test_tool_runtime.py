@@ -6,11 +6,20 @@ import subprocess
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
 from coderca.benchmark import load_task_1_manifest, materialize_task_1
-from coderca.contracts import Experiment, RegisteredTestCommand, TaskManifest
+from coderca.contracts import (
+    Experiment,
+    PatchDecision,
+    PatchValidationAction,
+    PublicValidationResult,
+    RegisteredTestCommand,
+    TaskManifest,
+    ToolResult,
+)
 from coderca.tool_runtime import ToolRuntime, load_registered_test_command
 
 TASK_1_DIRECTORY = Path("benchmarks/django-waffle/task-1")
@@ -51,8 +60,330 @@ def registered_command(
         schema_version="1",
         command_id="tests",
         argv=argv or ("python", "-m", "pytest", "-q"),
+        static_check_argv=(
+            "python",
+            "-c",
+            "from pathlib import Path; source = Path('src/module.py').read_bytes(); "
+            "compile(source, 'src/module.py', 'exec')",
+        ),
         timeout_seconds=timeout_seconds,
     )
+
+
+def patch_decision(
+    *,
+    target_path: str = "src/module.py",
+    unified_diff: str | None = None,
+) -> PatchDecision:
+    return PatchDecision(
+        hypothesis_id="H1",
+        target_path=target_path,
+        mechanism="Preserve explicit false values.",
+        unified_diff=unified_diff
+        or (
+            "--- a/src/module.py\n"
+            "+++ b/src/module.py\n"
+            "@@ -1 +1 @@\n"
+            "-value = True\n"
+            "+value = False\n"
+        ),
+    )
+
+
+def execute_patch_validation(
+    runtime: ToolRuntime, patch: PatchDecision, artifact_directory: Path
+) -> tuple[ToolResult, PublicValidationResult]:
+    validation_action = PatchValidationAction(
+        validation_action_id="V1",
+        hypothesis_id=patch.hypothesis_id,
+        purpose="Apply one candidate patch and run Public Validation.",
+        tool_name="apply_patch",
+        arguments={
+            "target_path": patch.target_path,
+            "unified_diff": patch.unified_diff,
+        },
+    )
+    return runtime.execute_patch_validation(
+        validation_action,
+        patch,
+        artifact_directory=artifact_directory,
+    )
+
+
+def test_patch_validation_applies_once_in_temporary_workspace_and_records_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    source = workspace / "src" / "module.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = True\n")
+    manifest_value = manifest().model_copy(update={"write_paths": ["src/module.py"]})
+    runtime = ToolRuntime(
+        workspace,
+        manifest_value,
+        registered_test_command=registered_command(),
+        enforce_faulty_commit=False,
+    )
+    real_run = subprocess.run
+    docker_workspaces: list[Path] = []
+
+    def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if command[0] == "git":
+            return cast(subprocess.CompletedProcess[str], real_run(command, **kwargs))
+        mount = command[command.index("--mount") + 1]
+        mounted = Path(
+            next(
+                part.removeprefix("src=")
+                for part in mount.split(",")
+                if part.startswith("src=")
+            )
+        )
+        docker_workspaces.append(mounted)
+        assert (mounted / "src/module.py").read_text() == "value = False\n"
+        if any("compile(source" in item for item in command):
+            return subprocess.CompletedProcess(command, 0, stdout="STATIC_OK\n")
+        return subprocess.CompletedProcess(command, 0, stdout="1 passed\n")
+
+    monkeypatch.setattr("coderca.tool_runtime.subprocess.run", run)
+
+    tool_result, result = execute_patch_validation(
+        runtime,
+        patch_decision(unified_diff=patch_decision().unified_diff.rstrip("\n")),
+        tmp_path / "run",
+    )
+
+    assert tool_result.status == "success"
+    assert tool_result.tool_name == "apply_patch"
+    assert tool_result.artifact_ref == "validation/result.json"
+    assert result.status == "passed"
+    assert result.static_check is not None
+    assert result.registered_test is not None
+    assert result.static_check.passed is True
+    assert result.registered_test.passed is True
+    assert result.patch_artifact_ref == "patches/candidate.patch"
+    assert result.artifact_ref == "validation/result.json"
+    assert source.read_text() == "value = True\n"
+    assert len(docker_workspaces) == 2
+    assert docker_workspaces[0] == docker_workspaces[1]
+    assert not docker_workspaces[0].exists()
+
+
+@pytest.mark.parametrize(
+    ("target_path", "diff"),
+    [
+        (
+            "tests/test_module.py",
+            (
+                "--- a/tests/test_module.py\n+++ b/tests/test_module.py\n"
+                "@@ -1 +1 @@\n-x=1\n+x=2\n"
+            ),
+        ),
+        (
+            "requirements.lock",
+            "--- a/requirements.lock\n+++ b/requirements.lock\n@@ -1 +1 @@\n-x\n+y\n",
+        ),
+        (
+            "../outside.py",
+            "--- a/../outside.py\n+++ b/../outside.py\n@@ -1 +1 @@\n-x\n+y\n",
+        ),
+    ],
+)
+def test_patch_validation_rejects_prohibited_or_out_of_scope_paths(
+    tmp_path: Path, target_path: str, diff: str
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    runtime = ToolRuntime(
+        workspace,
+        manifest().model_copy(update={"write_paths": [target_path]}),
+        registered_test_command=registered_command(),
+        enforce_faulty_commit=False,
+    )
+
+    _, result = execute_patch_validation(
+        runtime,
+        patch_decision(target_path=target_path, unified_diff=diff),
+        tmp_path / "run",
+    )
+
+    assert result.status == "failed"
+    assert result.failure_category == "permission_denied"
+
+
+def test_patch_validation_records_syntax_failure_without_running_second_patch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    source = workspace / "src" / "module.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = True\n")
+    runtime = ToolRuntime(
+        workspace,
+        manifest().model_copy(update={"write_paths": ["src/module.py"]}),
+        registered_test_command=registered_command(),
+        enforce_faulty_commit=False,
+    )
+    real_run = subprocess.run
+
+    def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if command[0] == "git":
+            return cast(subprocess.CompletedProcess[str], real_run(command, **kwargs))
+        if any("compile(source" in item for item in command):
+            return subprocess.CompletedProcess(command, 1, stdout="SyntaxError\n")
+        return subprocess.CompletedProcess(command, 1, stdout="FAILED\n")
+
+    monkeypatch.setattr("coderca.tool_runtime.subprocess.run", run)
+
+    _, result = execute_patch_validation(
+        runtime,
+        patch_decision(
+            unified_diff=(
+                "--- a/src/module.py\n+++ b/src/module.py\n@@ -1 +1 @@\n"
+                "-value = True\n+value =\n"
+            )
+        ),
+        tmp_path / "run",
+    )
+
+    assert result.status == "failed"
+    assert result.static_check is not None
+    assert result.registered_test is not None
+    assert result.static_check.passed is False
+    assert result.registered_test.passed is False
+    persisted = json.loads((tmp_path / "run" / result.artifact_ref).read_text())
+    assert persisted["status"] == "failed"
+
+
+def test_patch_validation_classifies_unavailable_docker_as_execution_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    source = workspace / "src" / "module.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = True\n")
+    runtime = ToolRuntime(
+        workspace,
+        manifest().model_copy(update={"write_paths": ["src/module.py"]}),
+        registered_test_command=registered_command(),
+        enforce_faulty_commit=False,
+    )
+    real_run = subprocess.run
+
+    def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if command[0] == "git":
+            return cast(subprocess.CompletedProcess[str], real_run(command, **kwargs))
+        raise FileNotFoundError("docker")
+
+    monkeypatch.setattr("coderca.tool_runtime.subprocess.run", run)
+
+    _, result = execute_patch_validation(
+        runtime, patch_decision(), tmp_path / "run"
+    )
+
+    assert result.status == "failed"
+    assert result.failure_category == "execution_failed"
+    assert result.failure_message == "static check could not start"
+
+
+@pytest.mark.parametrize(
+    "diff",
+    [
+        (
+            "--- a/src/module.py\n+++ b/src/module.py\n"
+            "@@ -1 +1 @@\n-missing = True\n+missing = False\n"
+        ),
+        (
+            "diff --git a/src/module.py b/src/module.py\n"
+            "deleted file mode 100644\n"
+            "--- a/src/module.py\n+++ /dev/null\n"
+        ),
+        (
+            "--- a/src/module.py\n+++ b/src/module.py\n@@ -1 +1 @@\n"
+            "-value = True\n+value = False\n"
+            "--- a/src/other.py\n+++ b/src/other.py\n@@ -1 +1 @@\n-x=1\n+x=2\n"
+        ),
+    ],
+)
+def test_patch_validation_rejects_non_applicable_or_prohibited_diff_shapes(
+    tmp_path: Path, diff: str
+) -> None:
+    workspace = tmp_path / "workspace"
+    source = workspace / "src" / "module.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = True\n")
+    runtime = ToolRuntime(
+        workspace,
+        manifest().model_copy(update={"write_paths": ["src/"]}),
+        registered_test_command=registered_command(),
+        enforce_faulty_commit=False,
+    )
+
+    _, result = execute_patch_validation(
+        runtime,
+        patch_decision(unified_diff=diff),
+        tmp_path / "run",
+    )
+
+    assert result.status == "failed"
+    assert result.failure_category in {"invalid_arguments", "permission_denied"}
+
+
+def test_task_1_patch_passes_real_public_validation_when_image_is_available(
+    tmp_path: Path,
+) -> None:
+    manifest_value = load_task_1_manifest()
+    _require_docker_image(manifest_value.docker_image)
+    workspace = materialize_task_1(tmp_path / "workspace")
+    command = load_registered_test_command(
+        TASK_1_DIRECTORY / "registered-command.json",
+        expected_command_id=manifest_value.test_command_id,
+    )
+    original = (workspace / "waffle/models.py").read_text()
+    runtime = ToolRuntime(
+        workspace,
+        manifest_value,
+        registered_test_command=command,
+    )
+    patch = PatchDecision(
+        hypothesis_id="H1",
+        target_path="waffle/models.py",
+        mechanism="Restore the explicit None check for the everyone override.",
+        unified_diff=(
+            "--- a/waffle/models.py\n+++ b/waffle/models.py\n"
+            "@@ -231,7 +231,7 @@ class AbstractBaseFlag(BaseModel):\n"
+            " \n"
+            "     def is_active_for_user(self, user: AbstractBaseUser) "
+            "-> bool | None:\n"
+            "         # According to the docs, everyone should override "
+            "all the other settings\n"
+            "-        if self.everyone:\n"
+            "+        if self.everyone is not None:\n"
+            "             return self.everyone\n"
+            " \n"
+            "         if self.authenticated and user.is_authenticated:\n"
+            "@@ -401,7 +401,7 @@ class AbstractUserFlag(AbstractBaseFlag):\n"
+            " \n"
+            "     def is_active_for_user(self, user: AbstractBaseUser) "
+            "-> bool | None:\n"
+            "         is_active = super().is_active_for_user(user)\n"
+            "-        if is_active:\n"
+            "+        if is_active is not None:\n"
+            "             return is_active\n"
+            " \n"
+            "         user_ids = self._get_user_ids()\n"
+        ),
+    )
+
+    _, result = execute_patch_validation(
+        runtime,
+        patch,
+        tmp_path / "run",
+    )
+
+    assert result.status == "passed"
+    assert result.static_check is not None and result.static_check.passed
+    assert result.registered_test is not None and result.registered_test.passed
+    assert (workspace / "waffle/models.py").read_text() == original
 
 
 def test_registered_test_command_loader_accepts_fixed_argv_and_expected_id(
@@ -758,7 +1089,7 @@ def test_read_code_uses_registered_tool_spec_and_persists_bounded_result(
         artifact_directory=tmp_path / "run" / "tool-results",
     )
 
-    assert set(runtime.tool_specs) == {"inspect_diff", "read_code"}
+    assert set(runtime.tool_specs) == {"apply_patch", "inspect_diff", "read_code"}
     assert runtime.tool_specs["read_code"].permission == "read_only"
     assert runtime.tool_specs["read_code"].input_schema["type"] == "object"
     assert runtime.tool_specs["read_code"].output_schema["type"] == "object"

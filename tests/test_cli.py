@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
+from typing import Any, cast
 
+import pytest
 from pydantic import SecretStr
 
 from coderca.benchmark import materialize_task_1
@@ -134,8 +137,11 @@ def test_cli_explicit_configured_provider_runs_formation_path_without_network(
     assert capsys.readouterr().err == ""  # type: ignore[attr-defined]
 
 
-def test_cli_workspace_runs_the_read_only_diagnosis_loop(
-    tmp_path: Path, valid_manifest_data: dict[str, object], capsys: object
+def test_cli_workspace_runs_the_patch_validation_loop(
+    tmp_path: Path,
+    valid_manifest_data: dict[str, object],
+    capsys: object,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     del valid_manifest_data
     manifest_path = Path("benchmarks/django-waffle/task-1/manifest.json")
@@ -169,8 +175,43 @@ def test_cli_workspace_runs_the_read_only_diagnosis_loop(
                 "evidence_refs": ["E1"],
                 "rationale": "The code Evidence is sufficient for read-only RCA.",
             },
+            "generate_patch": {
+                "hypothesis_id": "H1",
+                "target_path": "waffle/models.py",
+                "mechanism": "Restore the explicit None check.",
+                "unified_diff": (
+                    "--- a/waffle/models.py\n+++ b/waffle/models.py\n"
+                    "@@ -231,7 +231,7 @@ class AbstractBaseFlag(BaseModel):\n"
+                    " \n"
+                    "     def is_active_for_user(self, user: AbstractBaseUser) "
+                    "-> bool | None:\n"
+                    "         # According to the docs, everyone should override "
+                    "all the other settings\n"
+                    "-        if self.everyone:\n"
+                    "+        if self.everyone is not None:\n"
+                    "             return self.everyone\n"
+                    " \n"
+                    "         if self.authenticated and user.is_authenticated:\n"
+                ),
+            },
+            "generate_report": {
+                "trigger_condition": "The flag stores everyone=False.",
+                "propagation_path": "A truthiness guard falls through.",
+                "failure_manifestation": "The probe observes true instead of false.",
+                "repair_recommendation": "Restore explicit None checks.",
+            },
         }
     )
+    real_run = subprocess.run
+
+    def run(
+        command: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        if command[0] == "git":
+            return cast(subprocess.CompletedProcess[str], real_run(command, **kwargs))
+        return subprocess.CompletedProcess(command, 0, stdout="VALIDATION_OK\n")
+
+    monkeypatch.setattr("coderca.tool_runtime.subprocess.run", run)
 
     exit_code = main(
         [
@@ -186,9 +227,9 @@ def test_cli_workspace_runs_the_read_only_diagnosis_loop(
     assert exit_code == 0
     summary = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
     assert summary["status"] == "completed"
-    assert summary["stop_reason"] == "read_only_diagnosis_complete"
+    assert summary["stop_reason"] == "validation_passed"
     assert summary["active_hypothesis"] is None
-    assert summary["evidence_refs"] == ["E1"]
+    assert summary["evidence_refs"] == ["E1", "E2"]
     select_request = next(
         item
         for item in provider.structured_requests

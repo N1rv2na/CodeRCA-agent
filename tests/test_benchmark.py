@@ -230,6 +230,13 @@ def test_task_1_registered_command_is_fixed_argv_not_shell() -> None:
         "argv": ["python", "/opt/coderca-task/probe.py"],
         "command_id": TASK_1_COMMAND_ID,
         "schema_version": "1",
+        "static_check_argv": [
+            "python",
+            "-c",
+            "from pathlib import Path; source = "
+            "Path('waffle/models.py').read_bytes(); compile(source, "
+            "'waffle/models.py', 'exec')",
+        ],
         "timeout_seconds": 30,
         "test_failure_exit_codes": [1],
         "test_failure_output_markers": [

@@ -13,6 +13,7 @@ from coderca.contracts import (
     HypothesisAssessmentDecision,
     HypothesisAssessmentOutcome,
     HypothesisProposal,
+    PatchValidationAction,
     ReformulateHypothesisDecision,
     SelectExperimentDecision,
     ToolResult,
@@ -33,6 +34,16 @@ def proposal(index: int) -> HypothesisProposal:
 def form_h1(state: DiagnosisStateMachine) -> Hypothesis:
     state.begin_hypothesis_formation()
     return state.form_initial_hypothesis(FormHypothesisDecision(hypothesis=proposal(1)))
+
+
+def validation_action(hypothesis_id: str = "H1") -> PatchValidationAction:
+    return PatchValidationAction(
+        validation_action_id="V1",
+        hypothesis_id=hypothesis_id,
+        purpose="Apply one candidate patch and run Public Validation.",
+        tool_name="apply_patch",
+        arguments={"target_path": "src/module.py", "unified_diff": "diff"},
+    )
 
 
 def reformulate(
@@ -246,6 +257,50 @@ def test_supported_hypothesis_cannot_be_reformulated() -> None:
 
     with pytest.raises(InvalidDiagnosisTransition, match="supported"):
         state.begin_hypothesis_formation()
+
+
+@pytest.mark.parametrize(
+    "status", ["proposed", "testing", "rejected", "inconclusive"]
+)
+def test_only_supported_hypothesis_can_begin_validation(status: str) -> None:
+    state = DiagnosisStateMachine()
+    form_h1(state)
+    if status != "proposed":
+        state.transition_hypothesis("H1", status)  # type: ignore[arg-type]
+
+    with pytest.raises(InvalidDiagnosisTransition, match="supported"):
+        state.begin_validation(validation_action())
+
+
+def test_supported_hypothesis_enters_validation_once() -> None:
+    state = DiagnosisStateMachine()
+    form_h1(state)
+    state.transition_hypothesis("H1", "supported")
+
+    action = validation_action()
+    state.begin_validation(action)
+
+    assert state.stage is DiagnosisStage.VALIDATING
+    assert state.used_tool_calls == 1
+    assert state.validation_actions == (action,)
+    with pytest.raises(InvalidDiagnosisTransition):
+        state.begin_validation(action)
+
+
+def test_patch_validation_is_rejected_when_tool_budget_is_exhausted() -> None:
+    state = DiagnosisStateMachine(tool_call_limit=1)
+    form_h1(state)
+    evidence = register_evidence(state, direction="supporting")
+    state.apply_hypothesis_assessment(
+        HypothesisAssessmentDecision(
+            outcome="sufficiently_supported",
+            evidence_refs=(evidence.evidence_id,),
+            rationale="The registered Evidence supports H1.",
+        )
+    )
+
+    with pytest.raises(InvalidDiagnosisTransition, match="Tool budget exhausted"):
+        state.begin_validation(validation_action())
 
 
 def test_state_machine_allows_exactly_one_schema_correction_per_formation() -> None:

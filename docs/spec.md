@@ -19,7 +19,7 @@
 
 CodeRCA 提供一个本机 CLI。用户提交符合 Schema 的 Task Manifest，描述同一冻结 Django 仓库中的 Faulty Commit、CI 日志、注册测试命令、Docker 镜像和执行边界。Diagnosis Application Service 创建 Diagnosis Run，并由最小显式状态机控制生命周期；诊断循环内部使用受约束 ReAct，让操作者配置的 OpenAI-compatible 云端模型一次提出和检验一个 Active Hypothesis、选择 falsification-oriented Experiment、解释 Observation 和更新 Evidence。
 
-Agent 通过五个结构化工具检查 diff、搜索代码、读取源码、运行测试和应用补丁。`search_code` 在 Faulty Commit 工作区执行有界、可复现的字面量内容/符号文本与路径搜索，不要求预处理索引。每个工具调用必须关联当前 Active Hypothesis、调用目的、预期 Observation 和证伪关联。程序负责 Schema、稳定 ID、状态、权限、超时、Hypothesis/Tool Budget 和停止条件；Evidence 不计算数值 Score。
+Agent 通过五个结构化工具检查 diff、搜索代码、读取源码、运行测试和应用补丁。`search_code` 在 Faulty Commit 工作区执行有界、可复现的字面量内容/符号文本与路径搜索，不要求预处理索引。诊断阶段的工具调用必须关联当前 Active Hypothesis、调用目的、预期 Observation 和证伪关联；终态 `apply_patch` 通过绑定 supported Hypothesis 的 Patch Validation Action 执行。程序负责 Schema、稳定 ID、状态、权限、超时、Hypothesis/Tool Budget 和停止条件；Evidence 不计算数值 Score。
 
 诊断完成后，系统只为最终 supported Hypothesis 生成一个候选补丁，并在最小 Docker 执行边界中运行注册 Validation。CLI 输出实时摘要，完整事件、模型响应、工具结果、补丁和 Root Cause Report 保存到独立运行目录。三个冻结任务分别验证 diff/代码证据、自主代码探索定位和错误 H1 的 bounded self-correction；Evaluation Harness 只进行确定性的 Outcome Evaluation 与 Trajectory Evaluation，不产生统计性泛化结论。
 
@@ -129,15 +129,15 @@ Agent 通过五个结构化工具检查 diff、搜索代码、读取源码、运
 9. **Schema Failure**：结构输出失败时保存原始响应和校验错误，允许一次明确纠错；再次失败产生 Schema Failure，不使用模糊正则恢复。
 10. **Hypothesis 范围**：程序只允许一个 Active Hypothesis，并按 append-only 顺序分配 H1、H2、H3；不允许 H4、覆盖历史或复活 rejected H。H1 的 Evidence Basis 由程序固定为空；H2/H3 只能保存已解析为真实 Evidence、且属于 `rejected`/`inconclusive` History 的 ID。
 11. **Hypothesis 生命周期**：状态限定为 proposed、testing、supported、rejected 和 inconclusive。proposed/testing 是 Active；supported 进入 Validation；只有 rejected/inconclusive 且预算剩余时才能 Reformulate。
-12. **Experiment 契约**：每个工具调用必须包含当前 Active Hypothesis ID、目的、预期 Observation、falsification relevance、工具名和结构化参数。
+12. **Experiment 契约**：诊断阶段的 `inspect_diff`、`search_code`、`read_code` 和 `run_tests` 调用必须包含当前 Active Hypothesis ID、目的、预期 Observation、falsification relevance、工具名和结构化参数。终态 `apply_patch` 使用绑定 supported Hypothesis 的 Patch Validation Action，不冒充 Active Hypothesis Experiment。
 13. **Evidence 契约**：Evidence 必须引用输入或真实工具 Observation，并明确为 Supporting、Contradicting 或无信息结果。
 14. **Hypothesis Assessment**：模型提交引用 Evidence ID 的 continue/falsified/sufficiently-supported/inconclusive Assessment；程序验证归属和前置 Evidence，再映射状态。Evidence 不包含数值 Score 或 Ranking effect。
-15. **工具预算**：一次 Diagnosis Run 最多执行八次工具调用。总运行超时由 CLI 外层统一控制，不实现 Token、费用和多级时间预算。
+15. **工具预算**：一次 Diagnosis Run 最多执行八次工具调用；诊断 Experiment 与终态 Patch Validation Action 共用该预算。总运行超时由 CLI 外层统一控制，不实现 Token、费用和多级时间预算。
 16. **停止条件**：supported Hypothesis 完成 Validation、工具预算耗尽、H3 rejected/inconclusive、二次 Schema Failure 或不可恢复的模型/工具/沙箱错误都会停止运行。
 17. **补丁边界**：只为 supported Hypothesis 生成一个正式候选补丁。无论 Validation 结果如何，不执行第二轮自动补丁搜索。
 18. **Tool Spec**：每个工具声明名称、版本、描述、输入输出 Schema、权限类别、超时、结果上限、副作用和结构化错误。
 19. **工具错误**：统一错误至少包括 invalid arguments、permission denied、timeout 和 execution failed；工具默认不自动重试。
-20. **工具审计**：调用事件记录 Hypothesis、目的、预期 Observation、参数摘要、耗时、状态和结果引用，不记录或要求私有思维链。
+20. **工具审计**：诊断 Experiment 的调用事件记录 Hypothesis、目的、预期 Observation、参数摘要、耗时、状态和结果引用；Patch Validation Action 记录 supported Hypothesis、候选补丁参数、耗时、状态和结果引用。两者均不记录或要求私有思维链。
 21. **冻结工具集**：MVP 只有 `inspect_diff`、`search_code`、`read_code`、`run_tests` 和 `apply_patch` 五个工具，不实现 MCP 或任意 Shell。
 22. **工具合并**：`search_code` 可按函数、类或方法名称做字面量搜索，但不推断 AST Symbol；最终 Root Symbol 由诊断过程结合代码 Evidence 确定。MVP 不实现独立符号分析工具，语法和轻量静态检查并入注册 Validation。
 23. **路径权限**：只读工具只能访问 Manifest 允许的仓库范围；补丁只能修改允许的业务源码，不能修改测试、依赖锁、任务定义或 Evaluation 数据。

@@ -13,6 +13,8 @@ from .contracts import (
     HypothesisProposal,
     HypothesisStatus,
     Observation,
+    PatchValidationAction,
+    PublicValidationResult,
     ReformulateHypothesisDecision,
     ToolResult,
     UpdateEvidenceDecision,
@@ -36,6 +38,7 @@ _ALLOWED_TRANSITIONS = {
         {
             DiagnosisStage.EXECUTING_TOOL,
             DiagnosisStage.FORMING_HYPOTHESIS,
+            DiagnosisStage.VALIDATING,
             DiagnosisStage.FINALIZING,
         }
     ),
@@ -80,6 +83,7 @@ class DiagnosisStateMachine:
         self._used_tool_calls = 0
         self._current_experiment: Experiment | None = None
         self._experiments: tuple[Experiment, ...] = ()
+        self._validation_actions: tuple[PatchValidationAction, ...] = ()
         self._observations: tuple[Observation, ...] = ()
         self._evidence: tuple[Evidence, ...] = ()
 
@@ -138,6 +142,10 @@ class DiagnosisStateMachine:
     @property
     def experiments(self) -> tuple[Experiment, ...]:
         return self._experiments
+
+    @property
+    def validation_actions(self) -> tuple[PatchValidationAction, ...]:
+        return self._validation_actions
 
     @property
     def observations(self) -> tuple[Observation, ...]:
@@ -302,6 +310,82 @@ class DiagnosisStateMachine:
             self._hypothesis_history = tuple(history)
             return updated
         raise InvalidDiagnosisTransition(f"unknown Hypothesis {hypothesis_id}")
+
+    def begin_validation(self, action: PatchValidationAction) -> None:
+        """Authorize one patch Validation and consume one Tool Budget unit."""
+
+        if self._stage is not DiagnosisStage.DIAGNOSING:
+            raise InvalidDiagnosisTransition(
+                "Validation can only begin after diagnosis"
+            )
+        supported = self.supported_hypothesis
+        if supported is None or supported.hypothesis_id != action.hypothesis_id:
+            raise InvalidDiagnosisTransition(
+                "Validation requires the supported Hypothesis"
+            )
+        if self.tool_budget_exhausted:
+            raise InvalidDiagnosisTransition("Tool budget exhausted")
+        if self._validation_actions:
+            raise InvalidDiagnosisTransition(
+                "only one Patch Validation Action is allowed"
+            )
+        self._validation_actions = (*self._validation_actions, action)
+        self._used_tool_calls += 1
+        self.transition_to(DiagnosisStage.VALIDATING)
+
+    def record_public_validation(
+        self,
+        validation: PublicValidationResult,
+        action: PatchValidationAction,
+        tool_result: ToolResult,
+    ) -> tuple[Observation, Evidence]:
+        """Persist Public Validation as program-owned Observation and Evidence."""
+
+        if self._stage is not DiagnosisStage.VALIDATING:
+            raise InvalidDiagnosisTransition(
+                "Public Validation can only be recorded while validating"
+            )
+        supported = self.supported_hypothesis
+        if (
+            supported is None
+            or self._validation_actions != (action,)
+            or validation.hypothesis_id != supported.hypothesis_id
+            or action.hypothesis_id != supported.hypothesis_id
+            or tool_result.hypothesis_id != supported.hypothesis_id
+            or tool_result.validation_action_id != action.validation_action_id
+            or action.tool_name != "apply_patch"
+            or tool_result.tool_name != "apply_patch"
+        ):
+            raise InvalidDiagnosisTransition(
+                "Public Validation must trace the supported Hypothesis tool call"
+            )
+        observation = Observation(
+            observation_id=f"O{len(self._observations) + 1}",
+            validation_action_id=action.validation_action_id,
+            hypothesis_id=supported.hypothesis_id,
+            tool_result_ref=tool_result.tool_result_id,
+            source="public_validation",
+            summary=f"Public Validation {validation.status}",
+            artifact_ref=validation.artifact_ref,
+        )
+        evidence = Evidence(
+            evidence_id=f"E{len(self._evidence) + 1}",
+            hypothesis_id=supported.hypothesis_id,
+            observation_ref=observation.observation_id,
+            provenance=f"public_validation:{validation.artifact_ref}",
+            direction=(
+                "supporting" if validation.status == "passed" else "inconclusive"
+            ),
+            explanation=(
+                "The candidate patch passed Public Validation."
+                if validation.status == "passed"
+                else "The candidate patch failed Public Validation; the supported "
+                "Root Cause Hypothesis remains unchanged."
+            ),
+        )
+        self._observations = (*self._observations, observation)
+        self._evidence = (*self._evidence, evidence)
+        return observation, evidence
 
     def authorize_experiment(self, experiment: Experiment) -> None:
         """Validate binding before a Tool Runtime may execute the Experiment."""

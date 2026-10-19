@@ -198,8 +198,10 @@ class ContextBuilder:
             "task_context": self._task_context(task),
             "supported_hypothesis": supported.model_dump(mode="json"),
             "relevant_evidence": self._dump_evidence(evidence, relevant_ids),
-            "relevant_observations": self._dump_observations(
-                observations, relevant_ids
+            "relevant_observations": self._dump_observations_with_excerpt(
+                observations,
+                relevant_ids,
+                excerpt_limit=self.observation_excerpt_limit,
             ),
         }
 
@@ -278,5 +280,23 @@ class ContextBuilder:
             if item.hypothesis_id not in hypothesis_ids:
                 continue
             view = item.model_dump(mode="json", exclude={"excerpt"})
+            views.append(view)
+        return views
+
+    @staticmethod
+    def _dump_observations_with_excerpt(
+        observations: list[Observation],
+        hypothesis_ids: set[str],
+        *,
+        excerpt_limit: int,
+    ) -> list[dict[str, Any]]:
+        views: list[dict[str, Any]] = []
+        for item in observations:
+            if item.hypothesis_id not in hypothesis_ids:
+                continue
+            excerpt = item.excerpt[:excerpt_limit]
+            view = item.model_dump(mode="json")
+            view["excerpt"] = excerpt
+            view["truncated"] = len(item.excerpt) > len(excerpt)
             views.append(view)
         return views

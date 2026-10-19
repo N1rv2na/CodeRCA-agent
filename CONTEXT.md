@@ -91,7 +91,7 @@ _Avoid_: 普通工具错误、没有产生新信息的失败
 _Avoid_: 任意工具调用、无预期结果的探索
 
 **Observation（观察结果）**:
-Experiment 实际产生且可以被引用的结果。
+Experiment 或 Patch Validation Action 实际产生且可以被引用的结果。
 _Avoid_: Agent 对结果的解释、未执行的预期
 
 **Working Context（工作上下文）**:
@@ -111,6 +111,10 @@ _Avoid_: Code RAG、Root Symbol Ground Truth、Evidence Score、任意 Shell 搜
 **Validation（验证）**:
 使用测试与静态约束检查候选补丁是否恢复预期行为。
 _Avoid_: 因果解释评分、模型代码审查
+
+**Patch Validation Action（补丁验证动作）**:
+为 supported Hypothesis 在终态 Validation 中应用唯一候选补丁的受控动作；它绑定该 Hypothesis 并消耗 Tool Budget，但不是用于证伪 Active Hypothesis 的 Experiment。
+_Avoid_: Experiment、第二轮补丁搜索、任意写操作
 
 **Public Validation（公开验证）**:
 Agent 在 Diagnosis Run 中可见并能用于调整 Hypothesis 的 Validation。

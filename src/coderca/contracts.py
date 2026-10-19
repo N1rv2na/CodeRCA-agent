@@ -18,6 +18,8 @@ DiagnosisStopReason = (
         "hypothesis_budget_exhausted",
         "tool_budget_exhausted",
         "tool_failure",
+        "validation_passed",
+        "validation_failed",
     ]
 )
 DiagnosisEventFailureCategory = (
@@ -90,6 +92,7 @@ class RegisteredTestCommand(ContractModel):
     schema_version: Literal["1"]
     command_id: NonEmptyString
     argv: tuple[NonEmptyString, ...] = Field(min_length=1)
+    static_check_argv: tuple[NonEmptyString, ...] = ()
     timeout_seconds: int = Field(ge=1, le=300)
     test_failure_exit_codes: tuple[TestFailureExitCode, ...] = (1,)
     test_failure_output_markers: tuple[NonEmptyString, ...] = ()
@@ -180,6 +183,16 @@ class Experiment(ContractModel):
     arguments: dict[str, Any]
 
 
+class PatchValidationAction(ContractModel):
+    """One program-controlled patch application and Public Validation action."""
+
+    validation_action_id: NonEmptyString
+    hypothesis_id: NonEmptyString
+    purpose: NonEmptyString
+    tool_name: Literal["apply_patch"]
+    arguments: dict[str, Any]
+
+
 class SelectExperimentDecision(ContractModel):
     """Model-selected Experiment before program ID assignment."""
 
@@ -197,7 +210,8 @@ class ToolResult(ContractModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=False, frozen=True)
 
     tool_result_id: NonEmptyString
-    experiment_id: NonEmptyString
+    experiment_id: NonEmptyString | None = None
+    validation_action_id: NonEmptyString | None = None
     hypothesis_id: NonEmptyString
     tool_name: NonEmptyString
     status: Literal["success", "error"]
@@ -212,6 +226,10 @@ class ToolResult(ContractModel):
 
     @model_validator(mode="after")
     def require_consistent_status(self) -> ToolResult:
+        if (self.experiment_id is None) == (self.validation_action_id is None):
+            raise ValueError(
+                "Tool Result requires exactly one Experiment or Validation Action ID"
+            )
         if self.status == "success" and (
             self.error_category is not None or self.error_message is not None
         ):
@@ -230,18 +248,27 @@ class ToolResult(ContractModel):
 
 
 class Observation(ContractModel):
-    """A structured, artifact-backed result produced by an Experiment."""
+    """A structured, artifact-backed result produced by a controlled action."""
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
 
     observation_id: NonEmptyString
-    experiment_id: NonEmptyString
+    experiment_id: NonEmptyString | None = None
+    validation_action_id: NonEmptyString | None = None
     hypothesis_id: NonEmptyString
     tool_result_ref: NonEmptyString
     source: NonEmptyString
     summary: NonEmptyString
     artifact_ref: NonEmptyString
     excerpt: str = ""
+
+    @model_validator(mode="after")
+    def require_one_action_reference(self) -> Observation:
+        if (self.experiment_id is None) == (self.validation_action_id is None):
+            raise ValueError(
+                "Observation requires exactly one Experiment or Validation Action ID"
+            )
+        return self
 
 
 class Evidence(ContractModel):
@@ -274,6 +301,66 @@ class HypothesisAssessmentDecision(ContractModel):
     rationale: NonEmptyString
 
 
+class PatchDecision(ContractModel):
+    """One model-proposed patch bound to one supported Hypothesis."""
+
+    model_config = ConfigDict(
+        extra="forbid", str_strip_whitespace=False, frozen=True
+    )
+
+    hypothesis_id: NonEmptyString
+    target_path: NonEmptyString
+    mechanism: NonEmptyString
+    unified_diff: NonEmptyString
+
+
+class ReportDecision(ContractModel):
+    """Model-authored causal fields for the final Root Cause Report."""
+
+    trigger_condition: NonEmptyString
+    propagation_path: NonEmptyString
+    failure_manifestation: NonEmptyString
+    repair_recommendation: NonEmptyString
+
+
+class ValidationCheckResult(ContractModel):
+    """One artifact-backed check within Public Validation."""
+
+    name: Literal["static_check", "registered_test"]
+    passed: bool
+    exit_code: int
+    artifact_ref: NonEmptyString
+
+
+class PublicValidationResult(ContractModel):
+    """Terminal result of applying one patch in an isolated workspace."""
+
+    hypothesis_id: NonEmptyString
+    status: Literal["passed", "failed"]
+    patch_artifact_ref: NonEmptyString
+    artifact_ref: NonEmptyString
+    static_check: ValidationCheckResult | None = None
+    registered_test: ValidationCheckResult | None = None
+    failure_category: ToolErrorCategory | None = None
+    failure_message: NonEmptyString | None = None
+
+    @model_validator(mode="after")
+    def require_consistent_validation_status(self) -> PublicValidationResult:
+        if self.status == "passed":
+            if self.failure_category is not None or self.failure_message is not None:
+                raise ValueError("passed Validation cannot contain an error")
+            if (
+                self.static_check is None
+                or not self.static_check.passed
+                or self.registered_test is None
+                or not self.registered_test.passed
+            ):
+                raise ValueError("passed Validation requires both checks to pass")
+        elif not self.failure_message:
+            raise ValueError("failed Validation requires a failure message")
+        return self
+
+
 class DiagnosisEvent(ContractModel):
     sequence: int = Field(ge=1)
     event_type: NonEmptyString
@@ -286,9 +373,13 @@ class DiagnosisEvent(ContractModel):
     failure_category: DiagnosisEventFailureCategory | None = None
     validation_errors: list[dict[str, Any]] = Field(default_factory=list)
     experiment: Experiment | None = None
+    validation_action: PatchValidationAction | None = None
     tool_result: ToolResult | None = None
     observation: Observation | None = None
     evidence: Evidence | None = None
+    patch: PatchDecision | None = None
+    validation: PublicValidationResult | None = None
+    root_cause_analysis: ReportDecision | None = None
 
 
 class DiagnosisReport(ContractModel):
@@ -302,6 +393,9 @@ class DiagnosisReport(ContractModel):
     final_hypothesis: Hypothesis | None = None
     observations: list[Observation] = Field(default_factory=list)
     evidence: list[Evidence] = Field(default_factory=list)
+    patch: PatchDecision | None = None
+    validation: PublicValidationResult | None = None
+    root_cause_analysis: ReportDecision | None = None
 
 
 class RunArtifacts(ContractModel):
@@ -322,6 +416,9 @@ class DiagnosisRunResult(ContractModel):
     hypothesis_history: tuple[Hypothesis, ...] = ()
     observations: tuple[Observation, ...] = ()
     evidence: tuple[Evidence, ...] = ()
+    patch: PatchDecision | None = None
+    validation: PublicValidationResult | None = None
+    root_cause_analysis: ReportDecision | None = None
     run_directory: Path
     manifest_path: Path
     events_path: Path

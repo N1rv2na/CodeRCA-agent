@@ -19,10 +19,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from .contracts import (
     DecisionValidationError,
     Experiment,
+    PatchDecision,
+    PatchValidationAction,
+    PublicValidationResult,
     RegisteredTestCommand,
     TaskManifest,
     ToolErrorCategory,
     ToolResult,
+    ValidationCheckResult,
 )
 
 _MAX_READ_LINES = 200
@@ -75,6 +79,13 @@ class RunTestsArguments(ToolArguments):
     test_command_id: str = Field(min_length=1)
 
 
+class ApplyPatchArguments(ToolArguments):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+
+    target_path: str = Field(min_length=1)
+    unified_diff: str = Field(min_length=1)
+
+
 @dataclass(frozen=True)
 class _ToolExecutionOutput:
     content: str
@@ -97,7 +108,7 @@ class ToolSpec:
     result_limit: int
     side_effects: Literal["none", "temporary_workspace"]
     error_categories: tuple[ToolErrorCategory, ...]
-    handler: ToolHandler
+    handler: ToolHandler | None
 
     @property
     def input_schema(self) -> dict[str, object]:
@@ -172,6 +183,27 @@ class ToolRuntime:
                 ),
                 handler=self._read_code,
             ),
+            "apply_patch": ToolSpec(
+                name="apply_patch",
+                version="1",
+                description=(
+                    "Apply one candidate patch in the isolated Public Validation "
+                    "workspace."
+                ),
+                input_model=ApplyPatchArguments,
+                output_model=PublicValidationResult,
+                permission="code_execution",
+                timeout_seconds=10,
+                result_limit=_DEFAULT_RESULT_LIMIT,
+                side_effects="temporary_workspace",
+                error_categories=(
+                    "invalid_arguments",
+                    "permission_denied",
+                    "timeout",
+                    "execution_failed",
+                ),
+                handler=None,
+            ),
         }
         if registered_test_command is not None:
             self.tool_specs["run_tests"] = ToolSpec(
@@ -210,9 +242,189 @@ class ToolRuntime:
                 "result_limit": spec.result_limit,
             }
             for spec in (
-                self.tool_specs[name] for name in sorted(self.tool_specs)
+                self.tool_specs[name]
+                for name in sorted(self.tool_specs)
+                if name != "apply_patch"
             )
         ]
+
+    def execute_patch_validation(
+        self,
+        action: PatchValidationAction,
+        patch: PatchDecision,
+        *,
+        artifact_directory: Path,
+    ) -> tuple[ToolResult, PublicValidationResult]:
+        """Apply one patch to a temporary copy and run Public Validation."""
+
+        if (
+            action.hypothesis_id != patch.hypothesis_id
+            or action.tool_name != "apply_patch"
+        ):
+            raise ValueError(
+                "Patch Validation Action must bind the candidate patch"
+            )
+
+        started = monotonic()
+        self._call_count += 1
+        tool_result_id = f"T{self._call_count}"
+        root = Path(artifact_directory)
+        patch_path = root / "patches" / "candidate.patch"
+        validation_path = root / "validation" / "result.json"
+        patch_path.parent.mkdir(parents=True, exist_ok=True)
+        validation_path.parent.mkdir(parents=True, exist_ok=True)
+        unified_diff = (
+            patch.unified_diff
+            if patch.unified_diff.endswith("\n")
+            else patch.unified_diff + "\n"
+        )
+        patch_path.write_text(unified_diff, encoding="utf-8")
+        patch_ref = patch_path.relative_to(root).as_posix()
+        validation_ref = validation_path.relative_to(root).as_posix()
+
+        static_check: ValidationCheckResult | None = None
+        registered_test: ValidationCheckResult | None = None
+        failure_category: ToolErrorCategory | None = None
+        failure_message: str | None = None
+        try:
+            spec = self.tool_specs["apply_patch"]
+            try:
+                validated_arguments = spec.input_model.model_validate(
+                    action.arguments
+                )
+                arguments = ApplyPatchArguments.model_validate(
+                    validated_arguments.model_dump()
+                )
+            except ValidationError as exc:
+                raise _ToolFailure(
+                    "invalid_arguments",
+                    "apply_patch arguments do not satisfy the Tool Spec",
+                ) from exc
+            if (
+                arguments.target_path != patch.target_path
+                or arguments.unified_diff != patch.unified_diff
+            ):
+                raise _ToolFailure(
+                    "invalid_arguments",
+                    "apply_patch arguments must equal the candidate patch",
+                )
+            arguments = arguments.model_copy(update={"unified_diff": unified_diff})
+            target_path = self._authorized_write_path(arguments.target_path)
+            self._validate_single_file_patch(arguments.unified_diff, target_path)
+            command = self.registered_test_command
+            if command is None:
+                raise _ToolFailure(
+                    "invalid_arguments",
+                    "Public Validation requires the registered test command",
+                )
+            if not command.static_check_argv:
+                raise _ToolFailure(
+                    "invalid_arguments",
+                    "Public Validation requires a registered static check command",
+                )
+
+            with tempfile.TemporaryDirectory(prefix="coderca-validation-") as directory:
+                execution_workspace = Path(directory) / "workspace"
+                self._materialize_execution_workspace(execution_workspace)
+                self._apply_unified_diff(
+                    execution_workspace,
+                    arguments.unified_diff,
+                )
+                static_completed = self._run_validation_container(
+                    execution_workspace,
+                    argv=command.static_check_argv,
+                    timeout_seconds=10,
+                    label="static check",
+                )
+                static_ref = self._write_validation_output(
+                    root,
+                    "static-check.txt",
+                    static_completed.stdout or "",
+                )
+                static_check = ValidationCheckResult(
+                    name="static_check",
+                    passed=static_completed.returncode == 0,
+                    exit_code=static_completed.returncode,
+                    artifact_ref=static_ref,
+                )
+
+                test_completed = self._run_validation_container(
+                    execution_workspace,
+                    argv=command.argv,
+                    timeout_seconds=float(command.timeout_seconds),
+                    label="registered test",
+                )
+                test_ref = self._write_validation_output(
+                    root,
+                    "registered-test.txt",
+                    self._format_test_artifact(
+                        command,
+                        exit_code=test_completed.returncode,
+                        output=test_completed.stdout or "",
+                    ),
+                )
+                registered_test = ValidationCheckResult(
+                    name="registered_test",
+                    passed=test_completed.returncode == 0,
+                    exit_code=test_completed.returncode,
+                    artifact_ref=test_ref,
+                )
+                if not self._is_registered_test_outcome(command, test_completed):
+                    failure_category = "execution_failed"
+                    failure_message = (
+                        "registered test command did not produce a recognized outcome"
+                    )
+        except _ToolFailure as exc:
+            failure_category = exc.category
+            failure_message = str(exc)
+
+        passed = (
+            failure_category is None
+            and static_check is not None
+            and static_check.passed
+            and registered_test is not None
+            and registered_test.passed
+        )
+        if not passed and failure_message is None:
+            failed_checks = [
+                item.name
+                for item in (static_check, registered_test)
+                if item is not None and not item.passed
+            ]
+            failure_message = (
+                "Public Validation checks failed: " + ", ".join(failed_checks)
+            )
+        result = PublicValidationResult(
+            hypothesis_id=patch.hypothesis_id,
+            status="passed" if passed else "failed",
+            patch_artifact_ref=patch_ref,
+            artifact_ref=validation_ref,
+            static_check=static_check,
+            registered_test=registered_test,
+            failure_category=failure_category,
+            failure_message=failure_message,
+        )
+        validation_path.write_text(
+            json.dumps(result.model_dump(mode="json"), sort_keys=True, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+        output = json.dumps(result.model_dump(mode="json"), sort_keys=True)
+        bounded_output = output[:_DEFAULT_RESULT_LIMIT]
+        tool_result = ToolResult(
+            tool_result_id=tool_result_id,
+            validation_action_id=action.validation_action_id,
+            hypothesis_id=action.hypothesis_id,
+            tool_name="apply_patch",
+            status="success" if failure_category is None else "error",
+            output=bounded_output,
+            artifact_ref=validation_ref,
+            truncated=len(output) > len(bounded_output),
+            duration_ms=max(int((monotonic() - started) * 1_000), 0),
+            error_category=failure_category,
+            error_message=failure_message if failure_category is not None else None,
+        )
+        return tool_result, result
 
     def validate_selection(
         self, tool_name: str, arguments: dict[str, object]
@@ -307,6 +519,11 @@ class ToolRuntime:
                 raise _ToolFailure(
                     "invalid_arguments", "tool arguments do not satisfy the schema"
                 ) from exc
+            if spec.handler is None:
+                raise _ToolFailure(
+                    "invalid_arguments",
+                    f"{spec.name} requires its dedicated execution boundary",
+                )
             handler_result = spec.handler(arguments, spec.timeout_seconds)
             if isinstance(handler_result, _ToolExecutionOutput):
                 output = handler_result.content
@@ -495,14 +712,7 @@ class ToolRuntime:
             exit_code=completed.returncode,
             output=completed.stdout or "",
         )
-        output = completed.stdout or ""
-        marker_matches = not command.test_failure_output_markers or any(
-            marker in output for marker in command.test_failure_output_markers
-        )
-        is_test_outcome = completed.returncode == 0 or (
-            completed.returncode in command.test_failure_exit_codes
-            and marker_matches
-        )
+        is_test_outcome = self._is_registered_test_outcome(command, completed)
         if not is_test_outcome:
             raise _ToolFailure(
                 "execution_failed",
@@ -519,6 +729,187 @@ class ToolRuntime:
             command_id=command.command_id,
             exit_code=completed.returncode,
         )
+
+    @staticmethod
+    def _is_registered_test_outcome(
+        command: RegisteredTestCommand,
+        completed: subprocess.CompletedProcess[str],
+    ) -> bool:
+        output = completed.stdout or ""
+        marker_matches = not command.test_failure_output_markers or any(
+            marker in output for marker in command.test_failure_output_markers
+        )
+        return completed.returncode == 0 or (
+            completed.returncode in command.test_failure_exit_codes
+            and marker_matches
+        )
+
+    def _run_validation_container(
+        self,
+        execution_workspace: Path,
+        *,
+        argv: tuple[str, ...],
+        timeout_seconds: float,
+        label: str,
+    ) -> subprocess.CompletedProcess[str]:
+        container_name = f"coderca-{uuid4().hex}"
+        docker_command = [
+            "docker",
+            "run",
+            "--rm",
+            "--name",
+            container_name,
+            "--network",
+            "none",
+            "--workdir",
+            "/workspace",
+            "--mount",
+            f"type=bind,src={execution_workspace},dst=/workspace",
+            self.manifest.docker_image,
+            *argv,
+        ]
+        try:
+            return subprocess.run(
+                docker_command,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except OSError as exc:
+            raise _ToolFailure(
+                "execution_failed", f"{label} could not start"
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            cleanup_error = self._force_remove_container(container_name)
+            if cleanup_error is None:
+                raise _ToolFailure(
+                    "timeout", f"{label} exceeded its timeout"
+                ) from exc
+            raise _ToolFailure(
+                "execution_failed",
+                f"{label} timed out and container cleanup failed: {cleanup_error}",
+            ) from exc
+
+    @staticmethod
+    def _write_validation_output(root: Path, name: str, content: str) -> str:
+        path = root / "validation" / name
+        path.write_text(content, encoding="utf-8")
+        return path.relative_to(root).as_posix()
+
+    @staticmethod
+    def _apply_unified_diff(workspace: Path, unified_diff: str) -> None:
+        for check_only in (True, False):
+            command = ["git", "apply", "--no-index"]
+            if check_only:
+                command.append("--check")
+            command.append("-")
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=workspace,
+                    input=unified_diff,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise _ToolFailure(
+                    "execution_failed", "could not invoke the patch applicator"
+                ) from exc
+            if completed.returncode != 0:
+                detail = (completed.stderr or completed.stdout or "").strip()
+                raise _ToolFailure(
+                    "invalid_arguments",
+                    "candidate patch is not applicable"
+                    + (f": {detail}" if detail else ""),
+                )
+
+    def _authorized_write_path(self, value: str) -> str:
+        candidate = Path(value)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise _ToolFailure(
+                "permission_denied", "patch path escapes the repository workspace"
+            )
+        normalized = candidate.as_posix()
+        if not normalized or normalized == ".":
+            raise _ToolFailure("permission_denied", "patch path is empty")
+        parts = {part.casefold() for part in candidate.parts}
+        name = candidate.name.casefold()
+        prohibited_parts = {
+            "test",
+            "tests",
+            "benchmark",
+            "benchmarks",
+            "evaluation",
+            "eval",
+        }
+        prohibited_names = {
+            "manifest.json",
+            "ground-truth.json",
+            "registered-command.json",
+            "poetry.lock",
+            "uv.lock",
+            "pipfile.lock",
+            "pyproject.toml",
+            "package-lock.json",
+            "yarn.lock",
+        }
+        if (
+            parts & prohibited_parts
+            or name in prohibited_names
+            or name.startswith("test_")
+            or name.endswith("_test.py")
+            or name.startswith("requirements")
+        ):
+            raise _ToolFailure(
+                "permission_denied",
+                "patch modifies tests, task data, Evaluation data, or dependencies",
+            )
+        if not any(
+            normalized == allowed.rstrip("/")
+            or normalized.startswith(f"{allowed.rstrip('/')}/")
+            for allowed in self.manifest.write_paths
+        ):
+            raise _ToolFailure(
+                "permission_denied", "patch path is outside Manifest write_paths"
+            )
+        return normalized
+
+    @staticmethod
+    def _validate_single_file_patch(unified_diff: str, target_path: str) -> None:
+        lines = unified_diff.splitlines()
+        prohibited_prefixes = (
+            "new file mode ",
+            "deleted file mode ",
+            "old mode ",
+            "new mode ",
+            "rename from ",
+            "rename to ",
+            "copy from ",
+            "copy to ",
+            "GIT binary patch",
+            "Binary files ",
+        )
+        if any(line.startswith(prohibited_prefixes) for line in lines):
+            raise _ToolFailure(
+                "permission_denied", "patch contains a prohibited modification type"
+            )
+        old_headers = [line[4:] for line in lines if line.startswith("--- ")]
+        new_headers = [line[4:] for line in lines if line.startswith("+++ ")]
+        expected_old = f"a/{target_path}"
+        expected_new = f"b/{target_path}"
+        if old_headers != [expected_old] or new_headers != [expected_new]:
+            raise _ToolFailure(
+                "permission_denied",
+                "patch must modify exactly its declared target path",
+            )
+        if not any(line.startswith("@@ ") for line in lines):
+            raise _ToolFailure(
+                "invalid_arguments", "patch does not contain a unified diff hunk"
+            )
 
     @staticmethod
     def _format_test_artifact(

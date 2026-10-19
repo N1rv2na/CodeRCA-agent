@@ -160,7 +160,8 @@ Diagnosis Run 是 Agent 对一个 Diagnosis Task 的一次执行。它拥有：
 - Evidence 必须引用工具结果或输入 artifact；
 - Evidence 只有方向、来源和解释，不包含数值 Score 或 Ranking；
 - 只有 supported Hypothesis 可以生成正式候选补丁；
-- 一次 Diagnosis Run 最多调用八次工具；
+- 诊断工具调用使用绑定 Active Hypothesis 的 Experiment；终态 `apply_patch` 使用绑定 supported Hypothesis 的 Patch Validation Action；
+- 一次 Diagnosis Run 最多调用八次工具，诊断 Experiment 与 Patch Validation Action 共用该预算；
 - 真实仓库保持只读，修改只发生在临时工作区。
 
 ### 6.3 Root Cause Report
@@ -348,7 +349,7 @@ MVP 使用一个预构建 Django Docker 镜像。每次执行创建临时工作�
 1. 当前 Active Hypothesis 经 Evidence Assessment 进入 `supported`；
 2. supported Hypothesis 生成一个候选补丁；
 3. Tool Runtime 校验修改路径；
-4. `apply_patch` 在临时工作区应用补丁；
+4. 程序登记一个绑定 supported Hypothesis、计入 Tool Budget 的 Patch Validation Action，并由 `apply_patch` 在临时工作区应用补丁；
 5. `run_tests` 执行注册 Validation；
 6. 结果作为 Evidence 与报告字段保存；
 7. 无论通过或失败，MVP 不自动进行第二轮补丁搜索。

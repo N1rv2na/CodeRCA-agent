@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -24,6 +25,15 @@ def proposal_payload(symbol: str = "package.module.select_value") -> dict[str, o
     }
 
 
+def report_payload() -> dict[str, str]:
+    return {
+        "trigger_condition": "The configuration stores an explicit false value.",
+        "propagation_path": "The truthiness branch falls through to the default path.",
+        "failure_manifestation": "The registered test observes true instead of false.",
+        "repair_recommendation": "Preserve explicit false values with a None check.",
+    }
+
+
 def resolved_task(valid_manifest_data: dict[str, object]) -> DiagnosisTaskContext:
     return DiagnosisTaskContext(
         manifest=TaskManifest.model_validate(valid_manifest_data),
@@ -38,12 +48,23 @@ def test_run_tests_experiment_flows_through_observation_evidence_and_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
-    (workspace / "src").mkdir(parents=True)
-    task = resolved_task(valid_manifest_data)
+    source = workspace / "src" / "module.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = True\n")
+    manifest_data = dict(valid_manifest_data)
+    manifest_data["read_paths"] = ["src/"]
+    manifest_data["write_paths"] = ["src/module.py"]
+    task = resolved_task(manifest_data)
     command = RegisteredTestCommand(
         schema_version="1",
         command_id="registered-tests",
         argv=("python", "-m", "pytest", "-q"),
+        static_check_argv=(
+            "python",
+            "-c",
+            "from pathlib import Path; source = Path('src/module.py').read_bytes(); "
+            "compile(source, 'src/module.py', 'exec')",
+        ),
         timeout_seconds=30,
     )
     provider = FakeModelProvider(
@@ -68,13 +89,45 @@ def test_run_tests_experiment_flows_through_observation_evidence_and_report(
                 "evidence_refs": ["E1"],
                 "rationale": "The real test Observation supports H1.",
             },
+            "generate_patch": {
+                "hypothesis_id": "H1",
+                "target_path": "src/module.py",
+                "mechanism": "Preserve explicit false values.",
+                "unified_diff": (
+                    "--- a/src/module.py\n+++ b/src/module.py\n@@ -1 +1 @@\n"
+                    "-value = True\n+value = False\n"
+                ),
+            },
+            "generate_report": report_payload(),
         }
     )
 
+    real_run = subprocess.run
+
     def test_failure(
-        docker_command: list[str], **kwargs: object
+        docker_command: list[str], **kwargs: Any
     ) -> subprocess.CompletedProcess[str]:
+        if docker_command[0] == "git":
+            return cast(
+                subprocess.CompletedProcess[str], real_run(docker_command, **kwargs)
+            )
         del kwargs
+        if any("compile(source" in item for item in docker_command):
+            return subprocess.CompletedProcess(
+                docker_command, 0, stdout="STATIC_OK\n"
+            )
+        mount = docker_command[docker_command.index("--mount") + 1]
+        mounted = Path(
+            next(
+                part.removeprefix("src=")
+                for part in mount.split(",")
+                if part.startswith("src=")
+            )
+        )
+        if (mounted / "src/module.py").read_text() == "value = False\n":
+            return subprocess.CompletedProcess(
+                docker_command, 0, stdout="1 passed\n"
+            )
         return subprocess.CompletedProcess(
             docker_command,
             1,
@@ -108,6 +161,231 @@ def test_run_tests_experiment_flows_through_observation_evidence_and_report(
     assert tool_event["experiment"]["tool_name"] == "run_tests"
     assert tool_event["tool_result"]["command_id"] == "registered-tests"
     assert tool_event["tool_result"]["exit_code"] == 1
+
+
+@pytest.mark.parametrize(
+    ("test_exit_code", "expected_validation_status", "expected_stop_reason"),
+    [(0, "passed", "validation_passed"), (1, "failed", "validation_failed")],
+)
+def test_supported_hypothesis_generates_one_patch_and_finalizes_after_validation(
+    tmp_path: Path,
+    valid_manifest_data: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    test_exit_code: int,
+    expected_validation_status: str,
+    expected_stop_reason: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    source = workspace / "src" / "module.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = True\n")
+    manifest_data = dict(valid_manifest_data)
+    manifest_data["read_paths"] = ["src/"]
+    manifest_data["write_paths"] = ["src/module.py"]
+    task = resolved_task(manifest_data)
+    command = RegisteredTestCommand(
+        schema_version="1",
+        command_id=str(manifest_data["test_command_id"]),
+        argv=("python", "-m", "pytest", "-q"),
+        static_check_argv=(
+            "python",
+            "-c",
+            "from pathlib import Path; source = Path('src/module.py').read_bytes(); "
+            "compile(source, 'src/module.py', 'exec')",
+        ),
+        timeout_seconds=30,
+    )
+    provider = FakeModelProvider(
+        {
+            "form_hypothesis": {"hypothesis": proposal_payload("module.value")},
+            "select_experiment": {
+                "hypothesis_id": "H1",
+                "purpose": "Read the faulty value.",
+                "expected_observation": "The value is true.",
+                "falsification_relevance": "A false value would falsify H1.",
+                "tool_name": "read_code",
+                "arguments": {"path": "src/module.py", "start_line": 1, "end_line": 1},
+            },
+            "update_evidence": {
+                "hypothesis_id": "H1",
+                "observation_ref": "O1",
+                "direction": "supporting",
+                "explanation": "The source contains the faulty truthy value.",
+            },
+            "assess_hypothesis": {
+                "outcome": "sufficiently_supported",
+                "evidence_refs": ["E1"],
+                "rationale": "E1 supports H1.",
+            },
+            "generate_patch": {
+                "hypothesis_id": "H1",
+                "target_path": "src/module.py",
+                "mechanism": "Preserve the false value.",
+                "unified_diff": (
+                    "--- a/src/module.py\n+++ b/src/module.py\n@@ -1 +1 @@\n"
+                    "-value = True\n+value = False\n"
+                ),
+            },
+            "generate_report": report_payload(),
+        }
+    )
+    real_run = subprocess.run
+
+    def run(
+        command_line: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        if command_line[0] == "git":
+            return cast(
+                subprocess.CompletedProcess[str], real_run(command_line, **kwargs)
+            )
+        mount = command_line[command_line.index("--mount") + 1]
+        mounted = Path(
+            next(
+                part.removeprefix("src=")
+                for part in mount.split(",")
+                if part.startswith("src=")
+            )
+        )
+        assert (mounted / "src/module.py").read_text() == "value = False\n"
+        if any("compile(source" in item for item in command_line):
+            return subprocess.CompletedProcess(command_line, 0, stdout="STATIC_OK\n")
+        return subprocess.CompletedProcess(
+            command_line,
+            test_exit_code,
+            stdout="1 passed\n" if test_exit_code == 0 else "1 failed\n",
+        )
+
+    monkeypatch.setattr("coderca.tool_runtime.subprocess.run", run)
+    runtime = ToolRuntime(
+        workspace,
+        task.manifest,
+        registered_test_command=command,
+        enforce_faulty_commit=False,
+    )
+
+    result = DiagnosisApplicationService(
+        provider=provider,
+        run_store=RunStore(tmp_path / "runs"),
+        tool_runtime=runtime,
+    ).start_diagnosis(task)
+
+    assert result.status == "completed"
+    assert result.stage == "finalizing"
+    assert result.stop_reason == expected_stop_reason
+    assert result.patch is not None
+    assert result.validation is not None
+    assert result.validation.status == expected_validation_status
+    assert result.root_cause_analysis is not None
+    assert result.root_cause_analysis.trigger_condition.startswith(
+        "The configuration"
+    )
+    assert [item.source for item in result.observations] == [
+        "read_code",
+        "public_validation",
+    ]
+    assert result.observations[-1].experiment_id is None
+    assert result.observations[-1].validation_action_id == "V1"
+    assert result.observations[-1].tool_result_ref == "T2"
+    assert [item.direction for item in result.evidence] == [
+        "supporting",
+        "supporting" if expected_validation_status == "passed" else "inconclusive",
+    ]
+    assert provider.structured_calls.count("generate_patch") == 1
+    assert provider.structured_calls[-2:] == ["generate_patch", "generate_report"]
+    assert source.read_text() == "value = True\n"
+    report = json.loads(result.report_path.read_text())
+    assert report["patch"]["hypothesis_id"] == "H1"
+    assert report["validation"]["status"] == expected_validation_status
+    assert report["root_cause_analysis"] == report_payload()
+    assert (result.run_directory / report["validation"]["patch_artifact_ref"]).is_file()
+    assert (result.run_directory / report["validation"]["artifact_ref"]).is_file()
+    events = [json.loads(line) for line in result.events_path.read_text().splitlines()]
+    assert sum(event["event_type"] == "patch_generated" for event in events) == 1
+    assert sum(event["event_type"] == "validation_completed" for event in events) == 1
+    assert sum(event["event_type"] == "report_generated" for event in events) == 1
+    validation_event = next(
+        event for event in events if event["event_type"] == "validation_completed"
+    )
+    assert validation_event["validation_action"]["validation_action_id"] == "V1"
+    assert validation_event["tool_result"]["validation_action_id"] == "V1"
+    assert validation_event["experiment"] is None
+    assert events[-1]["event_type"] == "run_completed"
+    assert not any(
+        event["stage"] == "diagnosing"
+        for event in events
+        if event["sequence"] > next(
+            item["sequence"]
+            for item in events
+            if item["event_type"] == "validation_completed"
+        )
+    )
+
+
+def test_supported_hypothesis_does_not_patch_after_tool_budget_is_exhausted(
+    tmp_path: Path,
+    valid_manifest_data: dict[str, object],
+) -> None:
+    workspace = tmp_path / "workspace"
+    source = workspace / "src" / "module.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = True\n")
+    manifest_data = dict(valid_manifest_data)
+    manifest_data.update(
+        {
+            "read_paths": ["src/"],
+            "write_paths": ["src/module.py"],
+            "tool_call_limit": 1,
+        }
+    )
+    task = resolved_task(manifest_data)
+    command = RegisteredTestCommand(
+        schema_version="1",
+        command_id=str(manifest_data["test_command_id"]),
+        argv=("python", "-m", "pytest", "-q"),
+        static_check_argv=("python", "-m", "compileall", "-q", "src"),
+        timeout_seconds=30,
+    )
+    provider = FakeModelProvider(
+        {
+            "form_hypothesis": {"hypothesis": proposal_payload("module.value")},
+            "select_experiment": {
+                "hypothesis_id": "H1",
+                "purpose": "Read the faulty value.",
+                "expected_observation": "The value is true.",
+                "falsification_relevance": "A false value would falsify H1.",
+                "tool_name": "read_code",
+                "arguments": {"path": "src/module.py", "start_line": 1, "end_line": 1},
+            },
+            "update_evidence": {
+                "hypothesis_id": "H1",
+                "observation_ref": "O1",
+                "direction": "supporting",
+                "explanation": "The source contains the faulty value.",
+            },
+            "assess_hypothesis": {
+                "outcome": "sufficiently_supported",
+                "evidence_refs": ["E1"],
+                "rationale": "E1 supports H1.",
+            },
+        }
+    )
+    runtime = ToolRuntime(
+        workspace,
+        task.manifest,
+        registered_test_command=command,
+        enforce_faulty_commit=False,
+    )
+
+    result = DiagnosisApplicationService(
+        provider=provider,
+        run_store=RunStore(tmp_path / "runs"),
+        tool_runtime=runtime,
+    ).start_diagnosis(task)
+
+    assert result.stop_reason == "tool_budget_exhausted"
+    assert result.patch is None
+    assert result.validation is None
+    assert "generate_patch" not in provider.structured_calls
 
 
 def test_start_diagnosis_forms_only_h1_and_persists_observable_artifacts(

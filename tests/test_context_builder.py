@@ -241,6 +241,8 @@ def test_validation_context_requires_supported_hypothesis() -> None:
     assert context["supported_hypothesis"]["hypothesis_id"] == "H1"
     assert context["relevant_evidence"][0]["evidence_id"] == "E1"
     assert context["relevant_observations"][0]["artifact_ref"] == "tool-results/O1.txt"
+    assert len(context["relevant_observations"][0]["excerpt"]) == 2_000
+    assert context["relevant_observations"][0]["truncated"] is True
 
 
 def test_resolve_task_context_reads_bounded_ci_artifact_from_task_directory(

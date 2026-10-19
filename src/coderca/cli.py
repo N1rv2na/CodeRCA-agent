@@ -101,7 +101,7 @@ def main(
                 StructuredError(
                     code="model_provider_required",
                     message=(
-                        "The read-only diagnosis loop requires an explicitly "
+                        "The diagnosis loop requires an explicitly "
                         "configured ModelProvider."
                     ),
                     details={"model_provider": args.model_provider},
