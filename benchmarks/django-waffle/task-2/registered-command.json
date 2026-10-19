@@ -1,0 +1,21 @@
+{
+  "schema_version": "1",
+  "command_id": "django_waffle_task_2_v1",
+  "argv": [
+    "python",
+    "-c",
+    "\"\"\"Author-owned Task 2 regression probe; never copied into the agent workspace.\"\"\"\nimport sys\n\nfrom django.conf import settings\n\nsettings.configure(\n    SECRET_KEY=\"coderca-task-2\",\n    INSTALLED_APPS=[\"django.contrib.auth\", \"django.contrib.contenttypes\", \"waffle\"],\n    DATABASES={\"default\": {\"ENGINE\": \"django.db.backends.sqlite3\", \"NAME\": \":memory:\"}},\n    CACHES={\"default\": {\"BACKEND\": \"django.core.cache.backends.locmem.LocMemCache\"}},\n    USE_TZ=True,\n)\nimport django\n\ndjango.setup()\nfrom django.core.cache import cache\nfrom django.db import connection\nfrom waffle import switch_is_active\nfrom waffle.models import Switch\n\nwith connection.schema_editor() as editor:\n    editor.create_model(Switch)\nSwitch.objects.create(name=\"Checkout\", active=False)\nSwitch.objects.create(name=\"checkout\", active=True)\n\ntry:\n    for name, expected in [(\"Checkout\", False), (\"checkout\", True)]:\n        cache.clear()\n        assert switch_is_active(name) == expected, \"isolated lookup differs\"\n    for first, second in [(\"Checkout\", \"checkout\"), (\"checkout\", \"Checkout\")]:\n        cache.clear()\n        expected = {\"Checkout\": False, \"checkout\": True}\n        assert switch_is_active(first) == expected[first], \"first lookup differs\"\n        assert switch_is_active(second) == expected[second], \"second lookup differs\"\nexcept AssertionError:\n    print(\"CRCA_TASK_2_EXPECTED_ASSERTION_MISMATCH\")\n    print(\"Two persisted switches, Checkout=False and checkout=True, behave correctly\")\n    print(\"when queried independently after clearing the cache. Querying both in\")\n    print(\"sequence returns the first switch's state for the second name.\")\n    sys.exit(1)\nprint(\"CRCA_TASK_2_OK\")\n"
+  ],
+  "static_check_argv": [
+    "python",
+    "-c",
+    "from pathlib import Path; [compile(p.read_bytes(), str(p), 'exec') for p in Path('waffle').rglob('*.py')]"
+  ],
+  "timeout_seconds": 30,
+  "test_failure_exit_codes": [
+    1
+  ],
+  "test_failure_output_markers": [
+    "CRCA_TASK_2_EXPECTED_ASSERTION_MISMATCH"
+  ]
+}

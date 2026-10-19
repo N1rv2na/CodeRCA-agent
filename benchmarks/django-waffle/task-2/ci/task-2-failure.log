@@ -1,0 +1,4 @@
+CRCA_TASK_2_EXPECTED_ASSERTION_MISMATCH
+Two persisted switches, Checkout=False and checkout=True, behave correctly
+when queried independently after clearing the cache. Querying both in
+sequence returns the first switch's state for the second name.

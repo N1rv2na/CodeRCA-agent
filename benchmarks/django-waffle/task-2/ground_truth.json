@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "task_id": "crca-010-task-2",
+  "root_symbol": "keyfmt",
+  "trigger_condition": "Two persisted switches have case-distinct names Checkout and checkout and opposite active states; both are queried without clearing the shared cache.",
+  "defect_mechanism": "keyfmt lowercases the name before hashing, collapsing distinct case-sensitive database identities into one cache key.",
+  "propagation_path": "switch_is_active calls Switch.get; BaseModel._cache_key delegates to keyfmt; the second lookup reuses the first cached Switch.",
+  "failure_manifestation": "The second switch returns the first switch's active state; isolated cold lookups remain correct.",
+  "reference_repair_behavior": "Hash the original case-sensitive name without lowercasing."
+}
