@@ -16,7 +16,7 @@ def valid_manifest_data() -> dict[str, object]:
         "docker_image": "python:3.10",
         "read_paths": ["src/"],
         "write_paths": [],
-        "tool_call_limit": 8,
+        "tool_call_limit": 10,
     }
 
 
@@ -47,17 +47,24 @@ def valid_model_gate_responses() -> dict[str, dict[str, object]]:
             "evidence_summary": "The implementation checks against None.",
             "rationale": "Explicit False is preserved, contradicting the hypothesis.",
         },
-        "python_patch": {
+        "hypothesis_assessment": {
+            "outcome": "continue_testing",
+            "evidence_refs": ["E1"],
+            "rationale": (
+                "E1 is inconclusive and a bounded read_code Experiment remains."
+            ),
+        },
+        "python_patch_intent": {
             "hypothesis_id": "H1",
             "target_path": "sample.py",
             "mechanism": "Preserve an explicit zero timeout.",
-            "unified_diff": (
-                "--- a/sample.py\n"
-                "+++ b/sample.py\n"
-                "@@ -1,2 +1,2 @@\n"
-                " def select_timeout(configured: int | None, default: int) -> int:\n"
-                "-    return configured or default\n"
-                "+    return configured if configured is not None else default\n"
-            ),
+            "edits": [
+                {
+                    "old_text": "return configured or default",
+                    "new_text": (
+                        "return configured if configured is not None else default"
+                    ),
+                }
+            ],
         },
     }

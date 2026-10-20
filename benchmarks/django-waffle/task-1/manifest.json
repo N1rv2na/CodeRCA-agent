@@ -8,6 +8,6 @@
   "schema_version": "1",
   "task_id": "crca-002-task-1",
   "test_command_id": "django_waffle_task_1_v1",
-  "tool_call_limit": 8,
+  "tool_call_limit": 10,
   "write_paths": ["waffle/models.py"]
 }

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from .context_builder import ContextBuilder, DiagnosisTaskContext
 from .contracts import (
+    CandidatePatch,
     DecisionValidationError,
     DiagnosisEvent,
     DiagnosisEventFailureCategory,
@@ -22,7 +23,7 @@ from .contracts import (
     Experiment,
     FormHypothesisDecision,
     HypothesisAssessmentDecision,
-    PatchDecision,
+    PatchIntentDecision,
     PatchValidationAction,
     PublicValidationResult,
     ReformulateHypothesisDecision,
@@ -32,12 +33,16 @@ from .contracts import (
     TaskManifest,
     UpdateEvidenceDecision,
 )
+from .decision_prompts import HYPOTHESIS_ASSESSMENT_SYSTEM_PROMPT
 from .diagnosis_state import DiagnosisStateMachine, InvalidDiagnosisTransition
+from .localization import code_evidence_spans, validate_location_sources
 from .model_provider import (
     ModelProviderError,
+    PersistenceSafeModelArtifact,
     StructuredModelProvider,
     StructuredModelResponse,
 )
+from .patch_compiler import PatchIntentCompilationError
 from .run_store import RunStore
 from .tool_runtime import ToolRuntime
 
@@ -98,19 +103,44 @@ class DiagnosisApplicationService:
         )
         correction: dict[str, object] | None = None
         for attempt in (1, 2):
+            formation_context = _build_formation_context(
+                task, state, correction=correction
+            )
+            self._audit_request(
+                artifacts,
+                name=f"form-hypothesis-attempt-{attempt}.json",
+                decision="form_hypothesis",
+                attempt=attempt,
+                sequence=attempt,
+                system_prompt=_FORMATION_SYSTEM_PROMPT,
+                context=json.loads(formation_context),
+                response_model=FormHypothesisDecision,
+            )
             try:
                 structured_response = self.provider.generate_structured(
                     schema_name="form_hypothesis",
                     system_prompt=_FORMATION_SYSTEM_PROMPT,
-                    user_prompt=_build_formation_context(
-                        task, state, correction=correction
-                    ),
+                    user_prompt=formation_context,
                     response_model=FormHypothesisDecision,
                 )
                 break
             except ModelProviderError as exc:
                 response_artifact = _write_error_response(
                     self.run_store, artifacts, attempt, exc
+                )
+                self._audit_request(
+                    artifacts,
+                    name=f"form-hypothesis-attempt-{attempt}.json",
+                    decision="form_hypothesis",
+                    attempt=attempt,
+                    sequence=attempt,
+                    system_prompt=_FORMATION_SYSTEM_PROMPT,
+                    context=json.loads(formation_context),
+                    response_model=FormHypothesisDecision,
+                    response_name=(
+                        response_artifact.split("/")[-1] if response_artifact else None
+                    ),
+                    failed=True,
                 )
                 validation_errors = _validation_errors(exc)
                 structured_failure = _structured_output_failure_category(exc)
@@ -244,9 +274,7 @@ class DiagnosisApplicationService:
                 events=events,
                 failure_category="schema_failure",
                 model_response_artifact=None,
-                validation_errors=[
-                    {"type": "state_invariant", "message": str(exc)}
-                ],
+                validation_errors=[{"type": "state_invariant", "message": str(exc)}],
             )
 
     def _run_diagnosis_loop_unchecked(
@@ -292,8 +320,16 @@ class DiagnosisApplicationService:
                 system_prompt=(
                     "Select one falsification-first read-only Experiment using "
                     "exactly one tool from available_tools and arguments matching "
-                    "that tool's input_schema. Return only the requested structured "
-                    "object."
+                    "that tool's input_schema. Treat each tool's "
+                    "observation_capabilities and limitations as hard execution "
+                    "boundaries. Return only the requested structured object."
+                    " Identify the unresolved causal link and expected new information "
+                    "in purpose. Follow uninspected dependencies rather than repeating "
+                    "a search with no new question. Search excerpts are partial, not "
+                    "proof of behavior outside the inspected scope. Do not request "
+                    "instrumentation, arbitrary shell commands, temporary patches, "
+                    "or unregistered tests unless an available tool explicitly "
+                    "declares that observation capability."
                 ),
                 context=select_context,
                 response_model=SelectExperimentDecision,
@@ -342,10 +378,7 @@ class DiagnosisApplicationService:
                     state=state,
                     events=events,
                     stop_reason="tool_failure",
-                    summary=(
-                        "Diagnosis stopped after "
-                        f"{tool_result.error_category}."
-                    ),
+                    summary=(f"Diagnosis stopped after {tool_result.error_category}."),
                     failed=True,
                 )
             observation = state.record_observation(tool_result)
@@ -366,6 +399,26 @@ class DiagnosisApplicationService:
                 system_prompt=(
                     "Interpret the real Observation as qualitative Evidence. Return "
                     "only the requested structured object."
+                    " Evidence Basis Knowledge contains validated historical facts "
+                    "that motivated the Active Hypothesis. Use it to preserve call "
+                    "relationships and interpret the Latest Observation, but do not "
+                    "treat its historical direction as current-H Evidence."
+                    " Separate observed facts from inference in explanation. An "
+                    "uninspected callee has unknown behavior: passing an unchanged "
+                    "argument does not prove the callee preserves its semantics. "
+                    "Absence in local or truncated search results is not global "
+                    "absence. Use inconclusive when the relevant causal link is "
+                    "unresolved; local exclusion does not falsify the whole mechanism."
+                    " Classify direction relative to the Active Hypothesis mechanism, "
+                    "NOT relative to falsification_criterion or expected_observation. "
+                    "Positive facts for that mechanism are supporting, facts against "
+                    "it contradicting; ambiguous or mixed facts are inconclusive. "
+                    "Failure to falsify alone is not support. Before returning check "
+                    "that direction agrees with explanation. Do not broaden or "
+                    "silently reinterpret the fixed Hypothesis to fit new facts. "
+                    "When the Observation reveals a concrete alternative mechanism, "
+                    "state that implication separately in explanation while keeping "
+                    "direction relative to the current Active Hypothesis."
                 ),
                 context=evidence_context,
                 response_model=UpdateEvidenceDecision,
@@ -391,6 +444,7 @@ class DiagnosisApplicationService:
             assessment_context = ContextBuilder().build_assess_hypothesis(
                 task,
                 state,
+                available_tools=runtime.available_tool_catalog(),
                 observations=list(state.observations),
                 evidence=list(state.evidence),
                 used_tool_calls=state.used_tool_calls,
@@ -402,12 +456,7 @@ class DiagnosisApplicationService:
                 events=events,
                 artifacts=artifacts,
                 schema_name="assess_hypothesis",
-                system_prompt=(
-                    "Assess the Active Hypothesis from registered Evidence. "
-                    "evidence_refs may contain only evidence_id values listed in "
-                    "relevant_evidence; never cite Observation, Experiment, or Tool "
-                    "Result IDs. Return only the requested structured object."
-                ),
+                system_prompt=HYPOTHESIS_ASSESSMENT_SYSTEM_PROMPT,
                 context=assessment_context,
                 response_model=HypothesisAssessmentDecision,
                 model_sequence=model_sequence,
@@ -482,6 +531,7 @@ class DiagnosisApplicationService:
                     state,
                     observations=list(state.observations),
                     evidence=list(state.evidence),
+                    available_tools=runtime.available_tool_catalog(),
                 )
                 (
                     reformulated,
@@ -497,6 +547,14 @@ class DiagnosisApplicationService:
                     system_prompt=(
                         "Reformulate one materially different Hypothesis from "
                         "registered Evidence IDs. Return only the requested object."
+                        " In mechanism explain what was ruled out, what remains "
+                        "unknown, and the substantive causal change from rejected "
+                        "Hypotheses. Use cited Evidence, not paraphrases of the old "
+                        "mechanism. State a clear testable falsification criterion "
+                        "for the new explanation that is testable with "
+                        "available_tools; "
+                        "do not assume instrumentation or execution capabilities that "
+                        "the catalog does not provide."
                     ),
                     context=reformulation_context,
                     response_model=ReformulateHypothesisDecision,
@@ -541,39 +599,56 @@ class DiagnosisApplicationService:
             evidence=list(state.evidence),
         )
 
-        def validate_binding(value: PatchDecision) -> None:
+        candidate_patch: CandidatePatch | None = None
+
+        def validate_and_compile(value: PatchIntentDecision) -> None:
+            nonlocal candidate_patch
             if value.hypothesis_id != supported.hypothesis_id:
                 raise DecisionValidationError(
-                    "Patch must bind the supported Hypothesis",
+                    "Patch Intent must bind the supported Hypothesis",
                     [
                         {
                             "loc": ["hypothesis_id"],
                             "type": "wrong_hypothesis",
-                            "msg": "Patch does not bind the supported Hypothesis.",
+                            "msg": (
+                                "Patch Intent does not bind the supported "
+                                "Hypothesis."
+                            ),
                             "input": value.hypothesis_id,
                             "allowed_hypothesis_id": supported.hypothesis_id,
                         }
                     ],
                 )
+            try:
+                candidate_patch = runtime.compile_patch_intent(value)
+            except PatchIntentCompilationError as exc:
+                raise DecisionValidationError(
+                    "Patch Intent cannot be compiled deterministically",
+                    exc.validation_errors,
+                ) from exc
 
-        generated, patch_artifact, model_sequence = self._request_loop_decision(
+        _, patch_artifact, model_sequence = self._request_loop_decision(
             task=task,
             run_id=run_id,
             state=state,
             events=events,
             artifacts=artifacts,
-            schema_name="generate_patch",
+            schema_name="generate_patch_intent",
             system_prompt=(
-                "Generate exactly one unified diff for the supported Hypothesis. "
-                "Modify only one permitted business source file and return only "
+                "Propose one Patch Intent for the supported Hypothesis. Use one "
+                "permitted business source file and one to three exact source "
+                "replacements. Copy each old_text exactly from the observed "
+                "Faulty Commit code. Do not generate a unified diff. Return only "
                 "the requested structured object."
             ),
             context=validation_context,
-            response_model=PatchDecision,
+            response_model=PatchIntentDecision,
             model_sequence=model_sequence,
-            decision_validator=validate_binding,
+            decision_validator=validate_and_compile,
         )
-        patch = generated.value
+        if candidate_patch is None:  # pragma: no cover - validator guarantees this
+            raise RuntimeError("Patch Intent validation produced no Candidate Patch")
+        patch = candidate_patch
         validation_action = PatchValidationAction(
             validation_action_id="V1",
             hypothesis_id=patch.hypothesis_id,
@@ -593,7 +668,7 @@ class DiagnosisApplicationService:
                 task_id=task.manifest.task_id,
                 stage=state.stage,
                 message=(
-                    f"Generated one candidate patch for {patch.hypothesis_id}."
+                    f"Compiled one Candidate Patch for {patch.hypothesis_id}."
                 ),
                 hypothesis_history=list(state.hypothesis_history),
                 model_response_artifact=patch_artifact,
@@ -636,6 +711,33 @@ class DiagnosisApplicationService:
         )
         report_context["candidate_patch"] = patch.model_dump(mode="json")
         report_context["public_validation"] = validation.model_dump(mode="json")
+        report_context["code_location_evidence"] = code_evidence_spans(
+            supported.hypothesis_id,
+            list(state.evidence),
+            list(state.observations),
+            events,
+            artifacts.run_directory,
+            evidence_basis=supported.evidence_basis,
+        )[:64]
+
+        def validate_report(value: ReportDecision) -> None:
+            validate_location_sources(
+                value.location,
+                supported.hypothesis_id,
+                task.manifest,
+                list(state.evidence),
+                list(state.observations),
+                events,
+                artifacts.run_directory,
+                evidence_basis=supported.evidence_basis,
+            )
+            if value.location is not None:
+                runtime.validate_location_range(
+                    value.location.path,
+                    value.location.start_line,
+                    value.location.end_line,
+                )
+
         generated_report, report_artifact, _ = self._request_loop_decision(
             task=task,
             run_id=run_id,
@@ -647,9 +749,17 @@ class DiagnosisApplicationService:
                 "Complete the causal fields for the final Root Cause Report from "
                 "the supported Hypothesis, registered Evidence, candidate patch, "
                 "and Public Validation. Return only the requested object."
+                " Hypothesis.root_symbol is an immutable initial location guess, "
+                "not the final location. Return location explicitly, null if "
+                "unresolved. Otherwise name the actual defect symbol and narrow "
+                "Faulty Commit line range covered by code_location_evidence, citing "
+                "its Evidence IDs. Never infer location from patch target or test "
+                "success alone. Refine position without rewriting the supported "
+                "causal mechanism. A location does not assert Validation passed."
             ),
             context=report_context,
             response_model=ReportDecision,
+            decision_validator=validate_report,
             model_sequence=model_sequence,
         )
         root_cause_analysis = generated_report.value
@@ -687,7 +797,7 @@ class DiagnosisApplicationService:
         artifacts: RunArtifacts,
         state: DiagnosisStateMachine,
         events: list[DiagnosisEvent],
-        patch: PatchDecision,
+        patch: CandidatePatch,
         validation: PublicValidationResult,
         root_cause_analysis: ReportDecision,
     ) -> DiagnosisRunResult:
@@ -770,6 +880,19 @@ class DiagnosisApplicationService:
             request_context = dict(context)
             if correction is not None:
                 request_context["schema_correction"] = correction
+            request_name = (
+                f"{model_sequence + 1:02d}-{schema_name.replace('_', '-')}.json"
+            )
+            self._audit_request(
+                artifacts,
+                name=request_name,
+                decision=schema_name,
+                attempt=attempt,
+                sequence=model_sequence + 1,
+                system_prompt=system_prompt,
+                context=request_context,
+                response_model=response_model,
+            )
             try:
                 response = self.provider.generate_structured(
                     schema_name=schema_name,
@@ -791,6 +914,22 @@ class DiagnosisApplicationService:
                         ) from exc
             except ModelProviderError as exc:
                 model_sequence += 1
+                self._audit_request(
+                    artifacts,
+                    name=request_name,
+                    decision=schema_name,
+                    attempt=attempt,
+                    sequence=model_sequence,
+                    system_prompt=system_prompt,
+                    context=request_context,
+                    response_model=response_model,
+                    response_name=(
+                        request_name.removesuffix(".json") + "-invalid.json"
+                        if exc.persistence_safe_artifact is not None
+                        else None
+                    ),
+                    failed=True,
+                )
                 last_errors = _validation_errors(exc)
                 if exc.persistence_safe_artifact is not None:
                     last_artifact = self.run_store.write_model_response(
@@ -842,6 +981,50 @@ class DiagnosisApplicationService:
             )
             return response, artifact, model_sequence
         raise RuntimeError("structured decision correction loop exhausted")
+
+    def _audit_request(
+        self,
+        artifacts: RunArtifacts,
+        *,
+        name: str,
+        decision: str,
+        attempt: int,
+        sequence: int,
+        system_prompt: str,
+        context: object,
+        response_model: type[BaseModel],
+        response_name: str | None = None,
+        failed: bool = False,
+    ) -> None:
+        value = {
+            "decision_type": decision,
+            "attempt": attempt,
+            "sequence": sequence,
+            "system_prompt": system_prompt,
+            "working_context": context,
+            "response_schema": response_model.model_json_schema(),
+            "response_artifact": (
+                None
+                if failed and response_name is None
+                else f"model-responses/{response_name or name}"
+            ),
+            "boundary": "application_to_provider",
+        }
+        sanitizer = getattr(self.provider, "sanitize_request_artifact", None)
+        # Unknown adapters must explicitly supply sanitation before content is saved.
+        safe = (
+            sanitizer(value)
+            if sanitizer is not None
+            else PersistenceSafeModelArtifact(
+                {
+                    "decision_type": decision,
+                    "attempt": attempt,
+                    "sequence": sequence,
+                    "request_content_omitted": True,
+                }
+            )
+        )
+        self.run_store.write_model_request(artifacts, name=name, request=safe)
 
     def _finalize_diagnosis(
         self,

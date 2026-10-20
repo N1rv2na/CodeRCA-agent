@@ -6,7 +6,14 @@ from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
 TestFailureExitCode = Annotated[int, Field(ge=1, le=124)]
@@ -83,7 +90,7 @@ class TaskManifest(ContractModel):
     docker_image: NonEmptyString
     read_paths: list[NonEmptyString] = Field(min_length=1)
     write_paths: list[NonEmptyString]
-    tool_call_limit: int = Field(ge=1, le=8)
+    tool_call_limit: int = Field(ge=1, le=10)
 
 
 class RegisteredTestCommand(ContractModel):
@@ -99,9 +106,7 @@ class RegisteredTestCommand(ContractModel):
 
     @model_validator(mode="after")
     def require_unique_test_failure_exit_codes(self) -> RegisteredTestCommand:
-        if len(set(self.test_failure_exit_codes)) != len(
-            self.test_failure_exit_codes
-        ):
+        if len(set(self.test_failure_exit_codes)) != len(self.test_failure_exit_codes):
             raise ValueError("test failure exit codes must be unique")
         if len(set(self.test_failure_output_markers)) != len(
             self.test_failure_output_markers
@@ -238,8 +243,10 @@ class ToolResult(ContractModel):
             self.error_category is None or not self.error_message
         ):
             raise ValueError("failed Tool Result requires a classified error")
-        if self.tool_name == "run_tests" and self.status == "success" and (
-            self.command_id is None or self.exit_code is None
+        if (
+            self.tool_name == "run_tests"
+            and self.status == "success"
+            and (self.command_id is None or self.exit_code is None)
         ):
             raise ValueError(
                 "successful run_tests Tool Result requires command ID and exit code"
@@ -289,8 +296,23 @@ class UpdateEvidenceDecision(ContractModel):
 
     hypothesis_id: NonEmptyString
     observation_ref: NonEmptyString
-    direction: EvidenceDirection
-    explanation: NonEmptyString
+    direction: EvidenceDirection = Field(
+        description=(
+            "Direction relative to the Active Hypothesis mechanism, NOT its "
+            "falsification criterion or expected_observation. supporting: observed "
+            "facts positively support that mechanism; contradicting: observed facts "
+            "oppose that mechanism; inconclusive: insufficient, mixed, or ambiguous. "
+            "Failure to falsify alone is not supporting evidence."
+        )
+    )
+    explanation: NonEmptyString = Field(
+        description=(
+            "State observed facts, their relation to the unchanged Hypothesis "
+            "mechanism, and limitations. The selected direction must agree with "
+            "this explanation; do not label support for the mechanism contradicting "
+            "merely because it contradicts a falsification condition."
+        )
+    )
 
 
 class HypothesisAssessmentDecision(ContractModel):
@@ -301,17 +323,75 @@ class HypothesisAssessmentDecision(ContractModel):
     rationale: NonEmptyString
 
 
-class PatchDecision(ContractModel):
-    """One model-proposed patch bound to one supported Hypothesis."""
+class ExactReplacement(ContractModel):
+    """One literal source replacement within a model-proposed Patch Intent."""
 
-    model_config = ConfigDict(
-        extra="forbid", str_strip_whitespace=False, frozen=True
-    )
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False, frozen=True)
+
+    old_text: NonEmptyString
+    new_text: str
+
+    @model_validator(mode="after")
+    def reject_no_op_replacement(self) -> ExactReplacement:
+        if self.old_text == self.new_text:
+            raise ValueError("exact replacement must change its source text")
+        return self
+
+
+class PatchIntentDecision(ContractModel):
+    """A model-proposed repair intent bound to one supported Hypothesis."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False, frozen=True)
+
+    hypothesis_id: NonEmptyString
+    target_path: NonEmptyString
+    mechanism: NonEmptyString
+    edits: tuple[ExactReplacement, ...] = Field(min_length=1, max_length=3)
+
+    @field_validator("hypothesis_id", "target_path", "mechanism", mode="before")
+    @classmethod
+    def normalize_metadata(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class CandidatePatch(ContractModel):
+    """One program-compiled patch bound to one supported Hypothesis."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False, frozen=True)
 
     hypothesis_id: NonEmptyString
     target_path: NonEmptyString
     mechanism: NonEmptyString
     unified_diff: NonEmptyString
+
+    @field_validator("hypothesis_id", "target_path", "mechanism", mode="before")
+    @classmethod
+    def normalize_metadata(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class FinalRootCauseLocation(ContractModel):
+    """Evidence-backed location in Faulty Commit coordinates, not an initial guess."""
+
+    path: NonEmptyString
+    symbol: NonEmptyString | None
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    evidence_refs: tuple[NonEmptyString, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_location(self) -> FinalRootCauseLocation:
+        if (
+            self.path.startswith("/")
+            or "\\" in self.path
+            or any(part in {"", ".", ".."} for part in self.path.split("/"))
+        ):
+            raise ValueError("location path must be canonical repository-relative")
+        if self.end_line < self.start_line:
+            raise ValueError("location line range is reversed")
+        if len(set(self.evidence_refs)) != len(self.evidence_refs):
+            raise ValueError("location Evidence references must be unique")
+        return self
 
 
 class ReportDecision(ContractModel):
@@ -321,6 +401,7 @@ class ReportDecision(ContractModel):
     propagation_path: NonEmptyString
     failure_manifestation: NonEmptyString
     repair_recommendation: NonEmptyString
+    location: FinalRootCauseLocation | None
 
 
 class ValidationCheckResult(ContractModel):
@@ -377,7 +458,7 @@ class DiagnosisEvent(ContractModel):
     tool_result: ToolResult | None = None
     observation: Observation | None = None
     evidence: Evidence | None = None
-    patch: PatchDecision | None = None
+    patch: CandidatePatch | None = None
     validation: PublicValidationResult | None = None
     root_cause_analysis: ReportDecision | None = None
 
@@ -393,7 +474,7 @@ class DiagnosisReport(ContractModel):
     final_hypothesis: Hypothesis | None = None
     observations: list[Observation] = Field(default_factory=list)
     evidence: list[Evidence] = Field(default_factory=list)
-    patch: PatchDecision | None = None
+    patch: CandidatePatch | None = None
     validation: PublicValidationResult | None = None
     root_cause_analysis: ReportDecision | None = None
 
@@ -416,7 +497,7 @@ class DiagnosisRunResult(ContractModel):
     hypothesis_history: tuple[Hypothesis, ...] = ()
     observations: tuple[Observation, ...] = ()
     evidence: tuple[Evidence, ...] = ()
-    patch: PatchDecision | None = None
+    patch: CandidatePatch | None = None
     validation: PublicValidationResult | None = None
     root_cause_analysis: ReportDecision | None = None
     run_directory: Path

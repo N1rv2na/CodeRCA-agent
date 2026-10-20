@@ -51,8 +51,16 @@ _Avoid_: 跨进程授权、模型质量排名
 _Avoid_: 错误日志、失败断言、仅有代码位置
 
 **Root Symbol（根因符号）**:
-被标注为缺陷位置的函数、方法或类，是位置命中评测的规范单位。
+直接包含缺陷机制的函数、方法或有明确归属的模块级符号，是最终位置命中评测的规范单位。
 _Avoid_: 同文件中的任意相关代码、调用链上的任意符号
+
+**Suspected Location（暂定位置）**:
+Hypothesis 形成时对缺陷所在位置的猜测，可以宽泛或未知；后续定位变得精确不意味着原机制必然被证伪。
+_Avoid_: 已确认根因位置、最终位置命中答案
+
+**Final Root Cause Location（最终根因位置）**:
+诊断报告中由实际代码 Evidence 支持的缺陷位置，区别于假设形成时的暂定位置；定位正确与补丁 Validation 通过是不同结论。
+_Avoid_: 补丁目标文件、初始定位猜测、仅相关的调用方
 
 **Location Description（位置描述）**:
 初始 Hypothesis 尚不能确定 Root Symbol 时使用的可证伪近似代码位置；它必须能够指导后续定位，但不能作为位置命中评测答案。
@@ -75,7 +83,7 @@ _Avoid_: Candidate Pool、可变候选列表、Conversation History
 _Avoid_: Evidence Score、模型自信度、无引用解释、一般知识
 
 **Evidence Basis（证据依据）**:
-程序验证后保存在 H2/H3 上的一组有序、唯一 Evidence ID，说明哪些既有 Evidence 推动了本次 Reformulation；H1 的 Evidence Basis 永远为空。
+程序验证后保存在 H2/H3 上的一组有序、唯一 Evidence ID，说明哪些既有 Evidence 推动了本次 Reformulation；这些 Evidence 及其 Observation 是后续决策的历史解释依据，但不成为当前 Hypothesis 可用于生命周期判断的 Evidence；H1 的 Evidence Basis 永远为空。
 _Avoid_: 自由文本理由、Task/Manifest 字段、未经注册的 Evidence ID、H1 初始线索
 
 **Supporting Evidence（支持证据）**:
@@ -89,6 +97,14 @@ _Avoid_: 普通工具错误、没有产生新信息的失败
 **Experiment（实验）**:
 为主动证伪 Active Hypothesis 而执行，并预先声明目的、预期观察和证伪关联的受控动作。
 _Avoid_: 任意工具调用、无预期结果的探索
+
+**Executable Experiment（可执行实验）**:
+所选工具能在已注册能力与边界内直接产生 Expected Observation 的 Experiment。
+_Avoid_: 仅参数合法的调用、假设存在的插桩、未注册命令
+
+**Hypothesis Experiment Budget（假设实验预算）**:
+一个 Active Hypothesis 在必须进入终态 Assessment 前可消耗的 Experiment 数量上限，它与整个 Diagnosis Run 的 Tool Budget 不同。
+_Avoid_: Tool Budget、无限继续测试、自动判定假设错误
 
 **Observation（观察结果）**:
 Experiment 或 Patch Validation Action 实际产生且可以被引用的结果。
@@ -107,6 +123,22 @@ _Avoid_: Working Context、结构化 Diagnosis State、长期记忆
 _Avoid_: Code RAG、Root Symbol Ground Truth、Evidence Score、任意 Shell 搜索
 
 ### 修复验证
+
+**Patch Intent（补丁意图）**:
+模型为 supported Hypothesis 提交的结构化修复决定；它声明一个允许的目标文件、修复机制和一至三个 Exact Replacement，但尚不是可进入 Validation 的候选补丁。
+_Avoid_: unified diff、Candidate Patch、第二轮补丁搜索
+
+**Exact Replacement（精确替换）**:
+Patch Intent 中以非空原文锚定的单个 `old_text` 到 `new_text` 转换；原文必须在 Faulty Commit 目标文件中精确且唯一匹配，并且多个替换不得重叠。
+_Avoid_: 模糊匹配、空白修复、无锚点插入
+
+**Patch Compiler（补丁编译器）**:
+在 Faulty Commit 工作区验证 Patch Intent、确定性应用精确替换并生成规范 unified diff 的程序边界。
+_Avoid_: 模型语义决策、fuzzy patch repair、Public Validation
+
+**Candidate Patch（候选补丁）**:
+Patch Compiler 从一个合法 Patch Intent 确定性生成、并通过路径和可应用性检查的唯一正式补丁；只有 Candidate Patch 可以绑定 Patch Validation Action。
+_Avoid_: Patch Intent、模型直接生成的 diff、参考补丁
 
 **Validation（验证）**:
 使用测试与静态约束检查候选补丁是否恢复预期行为。

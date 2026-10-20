@@ -11,7 +11,7 @@
 
 ## 1. 摘要
 
-CodeRCA 是一个诊断单仓库 CI 测试失败的 AI Agent 原型。用户提交一个指向 Faulty Commit、CI 日志和注册测试命令的 Diagnosis Task，Agent 依次形成并检验一个 Active Hypothesis，通过 Experiment、Observation 和 Evidence 主动尝试证伪；如果当前 Hypothesis 结束，则基于累积诊断知识进行最多两次 Reformulation，最终验证一个受支持 Hypothesis 的候选补丁并生成可追溯的 Root Cause Report。
+CodeRCA 是一个诊断单仓库 CI 测试失败的 AI Agent 原型。用户提交一个指向 Faulty Commit、CI 日志和注册测试命令的 Diagnosis Task，Agent 依次形成并检验一个 Active Hypothesis，通过 Experiment、Observation 和 Evidence 主动尝试证伪；如果当前 Hypothesis 结束，则基于累积诊断知识进行最多两次 Reformulation。supported Hypothesis 产生结构化 Patch Intent，程序将其确定性编译为唯一 Candidate Patch，随后执行 Validation 并生成可追溯的 Root Cause Report。
 
 MVP 的目标不是证明 CodeRCA 在大规模数据集上优于其他系统，也不是交付通用故障平台。它要用一条真实、可检查的纵向闭环证明：模型决策可以被程序约束，工具调用可以服务于可证伪 Hypothesis，错误 H1 可以被真实 Evidence 否定，后续 Hypothesis 可以利用已积累知识 Reformulate，最终判断可以通过受控 Experiment 和 Validation 获得支持。
 
@@ -36,7 +36,7 @@ MVP 完成必须同时满足：
 - 五个工具均通过统一契约测试；
 - Agent 任意时刻最多维护一个 Active Hypothesis，并按 H1、H2、H3 维护 append-only Hypothesis History；
 - Agent 能通过 Contradicting Evidence 拒绝当前 Hypothesis，并在预算内基于累积知识 Reformulate；
-- Agent 能为 supported Hypothesis 生成一个可应用补丁，并在 Docker 中运行注册 Validation；
+- Agent 能为 supported Hypothesis 形成可编译 Patch Intent，由程序生成可应用 Candidate Patch，并在 Docker 中运行注册 Validation；
 - 运行过程保存结构化事件和 Root Cause Report；
 - 三个冻结任务可以执行确定性的 Outcome Evaluation 与 Trajectory Evaluation；
 - 默认自动化测试不依赖真实模型 API、API Key 或网络。
@@ -85,7 +85,7 @@ MVP 完成必须同时满足：
 1. **Agent 优先**：状态、决策约束和工具语义优先于功能数量。
 2. **Hypothesis 驱动**：每个工具调用必须关联一个活跃 Hypothesis、目的和预期 Observation。
 3. **Falsification 优先**：Experiment 优先寻找能够否定当前 Hypothesis 的高信息量 Observation；Evidence 不打分、不排名。
-4. **模型决策、程序约束**：模型提出 Hypothesis、选择 Experiment 和生成补丁；程序校验 Schema、状态、权限、预算和停止条件。
+4. **模型决策、程序约束**：模型提出 Hypothesis、选择 Experiment 和 Patch Intent；程序校验 Schema、状态、权限、预算和停止条件，并确定性编译 Candidate Patch。
 5. **按决策重建上下文**：每一步从结构化状态和相关诊断知识投影 Working Context，不重放完整 Conversation History。
 6. **真实 Experiment**：至少一个诊断路径必须在 Docker 中运行测试并验证 supported Hypothesis 的补丁。
 7. **失败可见**：Schema、模型、工具、沙箱和诊断失败必须留下结构化结果。
@@ -111,8 +111,8 @@ flowchart LR
 |---|---|---|
 | Task Intake | 读取 Task Manifest，校验同仓库任务输入 | 任意仓库导入和环境修复 |
 | Diagnosis | 管理 Active Hypothesis、Hypothesis History、Evidence、Experiment、Reformulation 与停止 | 直接执行命令或读取任意文件 |
-| Model | 通过 OpenAI-compatible Chat Completions 协议请求阶段决策 | 模型托管、厂商原生 SDK、路由和回退 |
-| Tool Runtime | Schema、权限、超时、错误和审计 | Root Cause 推理 |
+| Model | 通过 OpenAI-compatible Chat Completions 协议请求阶段决策和 Patch Intent | unified diff 序列化、模型托管、厂商原生 SDK、路由和回退 |
+| Tool Runtime | Schema、权限、超时、错误、Patch Intent 编译和审计 | Root Cause 推理与修复语义决策 |
 | Code Search | 在 Faulty Commit 工作区执行有界文本与路径搜索 | 推断 AST Symbol、选择最终 Root Cause |
 | Sandbox | 在临时容器工作区运行注册命令和补丁 | 恶意代码与生产多租户防御 |
 | Reporting | 保存事件、报告、补丁和测试输出 | Web 展示和长期查询 |
@@ -144,8 +144,9 @@ Diagnosis Run 是 Agent 对一个 Diagnosis Task 的一次执行。它拥有：
 - 零个或一个 Active Hypothesis；
 - Supporting Evidence 和 Contradicting Evidence；
 - Experiment 与 Observation；
+- 当前 Active Hypothesis 已用和剩余的 Experiment Budget；
 - 已用工具预算；
-- supported Hypothesis 的候选补丁及 Validation；
+- supported Hypothesis 的 Patch Intent、程序编译的 Candidate Patch 及 Validation；
 - 停止原因和 Root Cause Report。
 
 关键不变量：
@@ -159,16 +160,17 @@ Diagnosis Run 是 Agent 对一个 Diagnosis Task 的一次执行。它拥有：
 - H2/H3 的 Evidence Basis 只能来自 `ReformulateHypothesisDecision` 引用的有序、唯一 Evidence ID，且程序验证这些 Evidence 属于已结束的 Hypothesis History；
 - Evidence 必须引用工具结果或输入 artifact；
 - Evidence 只有方向、来源和解释，不包含数值 Score 或 Ranking；
-- 只有 supported Hypothesis 可以生成正式候选补丁；
+- 只有 supported Hypothesis 可以提交 Patch Intent；只有程序成功编译的 Candidate Patch 可以进入 Validation；
 - 诊断工具调用使用绑定 Active Hypothesis 的 Experiment；终态 `apply_patch` 使用绑定 supported Hypothesis 的 Patch Validation Action；
-- 一次 Diagnosis Run 最多调用八次工具，诊断 Experiment 与 Patch Validation Action 共用该预算；
+- 一次 Diagnosis Run 最多调用十次工具，诊断 Experiment 与 Patch Validation Action 共用该预算；该上限覆盖 H1～H3 各三次 Experiment 与一次 Validation 的完整最大生命周期；
+- 每个 Active Hypothesis 最多执行三个诊断 Experiment；第三次 Evidence 后不得继续测试，但程序不自动决定其终态；
 - 真实仓库保持只读，修改只发生在临时工作区。
 
 ### 6.3 Root Cause Report
 
 最小报告包含：
 
-- 最终 supported Hypothesis 的文件、Root Symbol 和简短故障机制；
+- 最终 supported Hypothesis 的简短故障机制，以及独立的最终 location；Hypothesis.root_symbol 仅是形成时的暂定符号；
 - 触发条件、传播路径、故障机制和失败表现；
 - H1～H3 Hypothesis History 及每个条目的终态；
 - Supporting Evidence 与 Contradicting Evidence 引用；
@@ -176,6 +178,20 @@ Diagnosis Run 是 Agent 对一个 Diagnosis Task 的一次执行。它拥有：
 - 停止原因。
 
 完整工具输出、耗时和错误保存在事件及运行文件中，不复制进报告正文。
+
+最终 `location` 必须显式返回对象或 null；对象包含仓库相对 path、可空 symbol、
+Faulty Commit 的 1-based 闭区间 start_line/end_line 和非空唯一 evidence_refs。
+至少一项当前 supported Hypothesis 的直接代码 Evidence，或其显式 `evidence_basis`
+引用的历史代码 Evidence，必须覆盖声明区间；允许来源包括 `read_code`、
+`inspect_diff` 和严格限定的 `search_code(content)`。合格搜索来源必须为
+`matched`、单项未截断、路径相同且区间完整覆盖；路径搜索、零结果、截断或不覆盖
+匹配均不合格。历史 Evidence 保留原 Hypothesis ID 与 Direction，只证明审计过的
+坐标，不变成当前 H 的 Supporting Evidence。程序检查来源链、读取权限、版本和文件
+边界，不从补丁或测试成功反推位置；supported H 仍需自己的因果 Supporting Evidence。
+既有 generate_report Context 增加最多 64 个代码来源区间，不新增模型阶段、工具调用
+或修改初始假设。非法位置复用一次结构化纠错，无法定位应返回 null。
+本地来源检查不证明符号语义或因果正确；窄定位与机制一致性仍需人工审核。
+旧产物只在读取入口补 null，不修改历史文件。见 ADR-0016。
 
 ## 7. Agent 工作流
 
@@ -199,6 +215,8 @@ stateDiagram-v2
 
 状态机只控制生命周期与不变量。`Diagnosing → ExecutingTool → UpdatingEvidence` 是受约束 ReAct 循环：模型选择针对 Active Hypothesis 的下一 Experiment；程序执行工具并记录 Observation；模型解释 Evidence 并提交 Assessment；程序校验 Evidence 引用、Budget 与合法转换后更新状态。
 
+Experiment 必须能由所选 Tool Spec 声明的 `observation_capabilities` 在当前参数和权限边界内直接产生预期 Observation，并遵守 `limitations`。模型不能假定任意 instrumentation、Shell、临时诊断补丁或未注册测试。Tool Catalog 由 Runtime 动态投影，新增工具不需要在 ContextBuilder 中维护名称列表。
+
 ### 7.2 阶段输出 Schema
 
 模型不填写一个万能决策对象。各阶段使用字段较少的独立 Schema：
@@ -208,7 +226,8 @@ stateDiagram-v2
 - `SelectExperimentDecision`：选择 Hypothesis、工具、目的、预期 Observation 和参数；
 - `UpdateEvidenceDecision`：将 Observation 解释为支持、反对或无信息 Evidence；
 - `HypothesisAssessmentDecision`：基于 Evidence 提议继续、falsified、sufficiently supported 或 inconclusive；
-- `PatchDecision`：为 supported Hypothesis 生成一个候选补丁；
+- `PatchIntentDecision`：为 supported Hypothesis 提交一个目标文件和一至三个 Exact Replacement；
+- `CandidatePatch`：程序根据合法 Patch Intent 确定性生成的规范 unified diff，不是模型阶段输出；
 - `ReportDecision`：补全最小 Root Cause Report 的因果字段。
 
 Schema 校验失败时保存原始响应与错误，并允许一次明确纠错；再次失败产生 Schema Failure 并停止当前 Diagnosis Run。禁止通过模糊正则猜测模型意图。
@@ -218,7 +237,8 @@ Schema 校验失败时保存原始响应与错误，并允许一次明确纠错�
 满足任一条件即进入 `Finalizing`：
 
 - supported Hypothesis 补丁完成 Validation；
-- 达到八次工具调用；
+- 达到十次工具调用；
+- 当前 Hypothesis 已执行三次 Experiment 时，禁止再次 `continue_testing`，必须先进入 supported、rejected 或 inconclusive；
 - H3 进入 `rejected` 或 `inconclusive`；
 - 纠错后仍发生 Schema Failure；
 - 模型、工具或沙箱发生不可恢复错误。
@@ -227,9 +247,9 @@ CLI 在状态机外设置一次总运行超时。MVP 不同时维护 Token、费
 
 ### 7.4 Hypothesis Evaluation 与 Reformulation
 
-Observation 不直接改变 Hypothesis 生命周期。模型先把 Observation 解释为带 provenance 的 Supporting、Contradicting 或 Inconclusive Evidence，再提交引用具体 Evidence ID 的结构化 Assessment。程序检查所有引用属于当前 Active Hypothesis，并将 `falsified`、`sufficiently_supported` 等 Assessment 映射到合法状态；模型不能分配 ID、写入状态或维护 Budget。
+Observation 不直接改变 Hypothesis 生命周期。模型先把 Observation 解释为带 provenance 的 Supporting、Contradicting 或 Inconclusive Evidence，再提交引用具体 Evidence ID 的结构化 Assessment。程序检查所有引用属于当前 Active Hypothesis，并将 `falsified`、`sufficiently_supported` 等 Assessment 映射到合法状态；模型不能分配 ID、写入状态或维护 Budget。Evidence Direction 始终相对当前机制；explanation 可以指出 Observation 暗示的具体替代机制，但不能重写当前 H。
 
-H1 可基于 Task 与 CI Failure 形成，但这些初始线索不是正式 Evidence，因此其 Schema 不暴露 `evidence_basis`，程序保存的 Evidence Basis 固定为空。H2/H3 使用独立的 `ReformulateHypothesisDecision` 引用推动 Reformulation 的 Evidence ID；程序拒绝空值、重复、未知 ID，以及不属于 `rejected`/`inconclusive` History 的 Evidence。Reformulation 同时看到已经结束的 Hypothesis History、相关代码/diff/测试 Observation 和剩余预算，不得仅换一种措辞重复 rejected 机制。
+H1 可基于 Task 与 CI Failure 形成，但这些初始线索不是正式 Evidence，因此其 Schema 不暴露 `evidence_basis`，程序保存的 Evidence Basis 固定为空。H2/H3 使用独立的 `ReformulateHypothesisDecision` 引用推动 Reformulation 的 Evidence ID；程序拒绝空值、重复、未知 ID，以及不属于 `rejected`/`inconclusive` History 的 Evidence。Reformulation 同时看到已经结束的 Hypothesis History、相关代码/diff/测试 Observation、Tool Catalog 和剩余预算，不得仅换一种措辞重复 rejected 机制；新 falsification criterion 必须能由现有工具检验。决定性 Experiment 不可执行或已出现更好的 observation-grounded 机制时，当前 H 可以先以 inconclusive 结束，再进行 Reformulation。
 
 ## 8. 上下文工程与模型边界
 
@@ -238,11 +258,11 @@ H1 可基于 Task 与 CI Failure 形成，但这些初始线索不是正式 Evid
 Agent State 是真相源，Working Context 是当前 Decision 对结构化状态的确定性投影。每次模型调用重新构造 Context，但不同 Decision 只包含必要信息：
 
 - Form H1：Task Context、CI Failure、空 History 和剩余预算；
-- Select Experiment：Active Hypothesis、Falsification Criterion、相关 Evidence/Observation 与 Tool Budget；
-- Update Evidence：Active Hypothesis、Current Experiment、Expected Observation、Latest Observation 和已有相关 Evidence；
-- Assess Hypothesis：Active Hypothesis、相关 Evidence/Observation 与剩余预算；
-- Reformulate H2/H3：原始 Task、已经结束的 Hypothesis History、否定当前机制的 Evidence、相关代码/diff/测试事实和剩余预算；
-- Validation：supported Hypothesis、相关 Evidence、代码/测试 Observation 与修复上下文。
+- Select Experiment：Active Hypothesis、Falsification Criterion、Evidence Basis Knowledge、当前 H 的相关 Evidence/Observation、Tool Catalog、Tool Budget 与单 H Experiment Budget；
+- Update Evidence：Active Hypothesis、Current Experiment、Expected Observation、Latest Observation、Evidence Basis Knowledge 和当前 H 已有 Evidence；
+- Assess Hypothesis：Active Hypothesis、Evidence Basis Knowledge、当前 H 的相关 Evidence/Observation、Tool Catalog 与剩余预算；
+- Reformulate H2/H3：原始 Task、已经结束的 Hypothesis History、否定或结束当前机制的 Evidence、相关代码/diff/测试事实、Tool Catalog 和剩余预算；
+- Validation：supported Hypothesis、Evidence Basis Knowledge、当前 H 的相关 Evidence、代码/测试 Observation 与修复上下文。
 
 选择规则使用 Hypothesis ID、固定字段、固定条数和字符长度限制。完整 CI 日志、代码、测试输出、Tool Result 和 Model Response 保存在 Run Artifact 中；Structured State 只保存 Observation/Evidence 及引用。MVP 不实现自动摘要、语义记忆检索、长期记忆、通用 Token Optimizer 或完整 Conversation History replay。
 
@@ -254,12 +274,15 @@ CodeRCA 只实现一个 OpenAI-compatible HTTP ModelProvider。每次进程运�
 
 无论使用哪种模式，`message.content` 都必须直接通过 `json.loads` 和本地 Pydantic Schema 校验，成功前不得进入 Agent State。Provider 不剥离 Markdown fence 或 `<think>`，不提取 JSON 子串，不猜测字段，也不模糊修复非法结构。Request Extensions 在标准 payload 构造后合并，禁止覆盖 `model`、`messages`、`stream`、`temperature` 和 `response_format`，不按 Endpoint、Model ID 或品牌推断，且其值不写入兼容性报告；响应中回显的 extension 字符串值在进入 Artifact 前脱敏。CRCA-003 对非法结果立即失败，不实现自动 retry、任意未校验 `extra_body`、服务专属 Tool Calling 或原生厂商 SDK。
 
-Model Compatibility Gate 是显式运行的兼容性检查，不是 Diagnosis Run 的授权门禁，也不是模型 Benchmark。它最多发起一次预检和以下四个一次性探针：
+Model Compatibility Gate 是显式运行的兼容性检查，不是 Diagnosis Run 的授权门禁，也不是模型 Benchmark。它最多发起一次预检和以下五个一次性探针：
 
 - 阶段 Schema 输出；
 - 工具选择和合法参数；
 - 根据 Observation 更新 Evidence；
-- 生成可应用的小型 Python 补丁。
+- 使用真实 `HypothesisAssessmentDecision` 合同评估 Active Hypothesis；
+- 生成可由本地 Patch Compiler 编译并通过行为检查的小型 Python Patch Intent。
+
+Assessment 应用与 Gate 共享正向精确输出合同：模型只能返回 `outcome`、`evidence_refs` 和 `rationale` 三个键，并看到一个完整合法 JSON 形状。未知字段仍由本地 Pydantic `extra="forbid"` 拒绝，不做删除或修复。
 
 两种 Structured Output Mode 运行相同探针。门禁生成记录 mode 的脱敏 Model Compatibility Report；失败返回非零退出码，但 Diagnosis Run 只读取当前 Model Configuration，不隐式读取门禁报告、自动切换 mode 或阻止运行。自动化测试使用 FakeModelProvider。MVP 不实现本地模型后端、原生厂商 SDK、多真实后端、路由、回退或录制轨迹回放。
 
@@ -268,6 +291,33 @@ Model Compatibility Gate 是显式运行的兼容性检查，不是 Diagnosis Ru
 Diagnosis Run 会把所需的公开基准代码片段、CI 日志和结构化状态发送到操作者配置的云端 API。MVP 仅处理冻结的公开开源基准仓库，不承诺私有代码或生产数据的隐私能力。
 
 API Key 只从进程环境读取，不写入 Task Manifest、运行目录、日志、Model Compatibility Report 或 Docker 容器。错误与审计信息必须脱敏，不记录 Authorization Header。
+
+每次 Diagnosis 模型决策在 `model-requests/` 保存脱敏的应用到 Provider
+请求快照：Decision Type、序号、attempt、System Prompt、Working Context、
+Response Schema 与对应 response artifact 引用；Schema Correction 也独立保存。
+它不包含 HTTP Header、endpoint configuration，也不代表 Provider 追加格式指令后的
+完整 HTTP payload。未声明安全脱敏能力的自定义 Provider 仅记录调用元数据。
+快照用于审计，不回放到模型上下文；任意仓库内容仍可能敏感，不应公开整个 Run Directory。
+
+Evidence 解释必须区分观察事实与推断：未检查的被调用函数仍是未知，局部或截断
+搜索未发现行为不代表全路径不存在。Assessment 须核对原证伪条件与实际观察覆盖，
+不能仅凭 contradicting 标签 Reject。Select Experiment 优先补足未检查的因果环节，
+并说明预期信息增量。Reformulation 需说明机制的实质变化，不仅改写措辞。
+这些是模型决策约束，不是程序对语义正确性的保证。
+Evidence Direction 始终相对 Active Hypothesis 的 mechanism，而非
+falsification_criterion 或 expected_observation。否定证伪条件本身不构成支持；
+支持需要正向机制事实。若 Assessment 发现事实、解释和已注册 direction 冲突，
+不能重标已有 Evidence，不能靠附加 note 字段覆盖它；应说明冲突并继续有信息增量
+的 Experiment，或在没有可执行实验、已出现更具体的替代机制时 inconclusive。
+每个 Active Hypothesis 最多三次 Experiment；预算耗尽后的 continue_testing 由程序
+拒绝并复用一次 Schema Correction。总 Tool Budget 与方向校验保持不变，不新增
+语义评分或自动修复。
+H2/H3 的 Select Experiment、Update Evidence、Assess Hypothesis 和 Validation
+Context 都携带 `evidence_basis` 明确引用的历史 Evidence 与对应 Observation 的有界
+excerpt；该 Evidence Basis Knowledge 与当前 H 的 relevant Evidence 分开，历史
+Direction 不能直接用于当前 H 的 Assessment。Assessment 另含当前假设的 Observation
+有界 excerpt，以便核查 Evidence 解释。每条沿用 2,000 字符上限与截断标记，数量受
+既有 Tool Budget 约束，不携带完整原始输出或无关历史。
 
 ## 9. Tool Runtime
 
@@ -281,6 +331,8 @@ API Key 只从进程环境读取，不写入 Task Manifest、运行目录、日�
 - 超时；
 - 结果大小上限；
 - 副作用；
+- 可直接产生的 Observation 能力；
+- 明确不支持的诊断行为和限制；
 - 结构化错误语义。
 
 统一错误至少包括：
@@ -302,7 +354,7 @@ API Key 只从进程环境读取，不写入 Task Manifest、运行目录、日�
 | `run_tests` | 在 Docker 中运行注册测试命令 | 不接受任意 Shell |
 | `apply_patch` | 在临时工作区应用候选补丁 | 只能修改允许的业务源码路径 |
 
-`search_code` 返回仓库相对路径、行号或行区间、有界代码片段、截断状态和 Artifact 引用。轻量文本搜索不能可靠推断 AST Symbol，因此匹配结果不得自动成为 Root Symbol Ground Truth；最终 Root Symbol 由诊断过程结合 `read_code`、测试和其他 Evidence 确定。语法和轻量静态检查作为注册 Validation 命令的一部分，不设置独立 `static_check`。
+`search_code` 返回仓库相对路径、行号或行区间、有界代码片段、截断状态和 Artifact 引用。轻量文本搜索不能可靠推断 AST Symbol，因此匹配结果不得自动成为 Root Symbol Ground Truth。严格的未截断内容匹配可以证明模型观察过某个源码坐标，但不能单独证明 `symbol` 或因果机制；最终 Root Symbol 仍由诊断过程结合代码、测试和其他 Evidence 确定。语法和轻量静态检查作为注册 Validation 命令的一部分，不设置独立 `static_check`。
 
 ## 10. Lightweight Code Search
 
@@ -347,12 +399,13 @@ MVP 使用一个预构建 Django Docker 镜像。每次执行创建临时工作�
 ### 11.2 Supported Hypothesis 补丁流程
 
 1. 当前 Active Hypothesis 经 Evidence Assessment 进入 `supported`；
-2. supported Hypothesis 生成一个候选补丁；
-3. Tool Runtime 校验修改路径；
-4. 程序登记一个绑定 supported Hypothesis、计入 Tool Budget 的 Patch Validation Action，并由 `apply_patch` 在临时工作区应用补丁；
-5. `run_tests` 执行注册 Validation；
-6. 结果作为 Evidence 与报告字段保存；
-7. 无论通过或失败，MVP 不自动进行第二轮补丁搜索。
+2. 模型提交绑定 supported Hypothesis 的 Patch Intent，包含一个允许目标文件和一至三个 Exact Replacement；
+3. Tool Runtime 校验路径、UTF-8 文本、原文唯一匹配、编辑不重叠和非 no-op；失败时复用一次结构化决策纠错；
+4. Patch Compiler 在内存中应用精确替换，生成规范 Candidate Patch，并以 `git apply --check` 验证可应用性；它不做 fuzzy matching 或语义修复；
+5. 编译成功后，程序登记一个绑定 supported Hypothesis、计入 Tool Budget 的 Patch Validation Action，并由 `apply_patch` 在临时工作区应用 Candidate Patch；
+6. 静态检查和注册测试执行 Public Validation；
+7. 结果作为 Evidence 与报告字段保存；
+8. 无论通过或失败，MVP 不自动生成第二个 Patch Intent 或进行第二轮补丁搜索。
 
 禁止修改或删除已有测试、依赖锁、任务定义和评测数据。MVP 不实现完整 Hidden Validation 或自动语义防投机系统。
 
@@ -400,7 +453,7 @@ Evaluation Harness 调用 Diagnosis Application Service，并输出逐任务检�
 
 ### 14.1 Outcome Evaluation
 
-- 最终 supported Hypothesis 的 Root Symbol 是否精确命中；
+- 最终 root_cause_analysis.location 的路径、规范 Root Symbol 与缺陷行范围是否命中，而非初始 Hypothesis.root_symbol；
 - 候选补丁是否可应用；
 - 注册 Validation 是否通过；
 - Root Cause Report 是否包含必需结构化字段。
@@ -412,7 +465,7 @@ Evaluation Harness 调用 Diagnosis Application Service，并输出逐任务检�
 - 是否至少产生一条可追溯 Evidence；
 - Task 2 是否使用真实搜索 Observation 推进诊断，而不是把搜索算法或固定工具顺序作为验收目标；
 - Supporting 和 Contradicting 方向是否合法；
-- 是否遵守八次工具预算；
+- 是否遵守十次工具预算；
 - 是否产生合法停止原因；
 - 是否只有 supported Hypothesis 进入补丁 Validation；
 - 任意时刻是否最多一个 Active Hypothesis；
@@ -429,7 +482,7 @@ Evaluation 不调用 LLM Judge，不与 Baseline 比较，不汇总具有泛化�
 - 单 Active Hypothesis 与 append-only H1～H3 History；
 - rejected 不可复活、reject-before-reformulate 和 no-H4；
 - Assessment 必须引用当前 H 的真实 Evidence；
-- 八次工具预算和停止条件；
+- 十次工具预算和停止条件；
 - 各阶段 Schema 与一次纠错；
 - decision-specific reconstructed Working Context。
 
@@ -497,6 +550,7 @@ Lightweight Code Search 已经是检索范围的最小实现，不再保留“�
 ## 18. 架构决策记录
 
 - [ADR-0014：单 Active Hypothesis 与按决策重建上下文](adr/0014-single-active-hypothesis-reconstructed-context.md)，取代 ADR-0001
+- [ADR-0017：可执行 Experiment 与单 Hypothesis 诊断预算](adr/0017-executable-experiments-and-bounded-hypothesis-testing.md)
 - [ADR-0002：结构化 Tool Runtime 且不实现 MCP](adr/0002-typed-tool-runtime.md)
 - [ADR-0015：Lightweight Code Search](adr/0015-lightweight-code-search.md)，取代 ADR-0007
 - [ADR-0008：按运行目录持久化](adr/0008-run-directory-persistence.md)，取代 ADR-0005

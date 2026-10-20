@@ -25,7 +25,7 @@ CodeRCA 的 Diagnosis Run 依赖操作者选择的云端模型，但 Agent Core 
 - Structured Output Mode 只允许 `native_json_schema` 和 `json_text`，不按 Provider 或 Model 名称推断。
 - 固定非流式与 `temperature=0`；native mode 发送 strict JSON Schema，json-text mode 不发送 `response_format`。
 - 所有结构化输出直接执行 `json.loads` 和本地 Pydantic 校验，成功前不得进入 Agent State。
-- 提供一次 preflight 与四个一次性探针：阶段 Schema、合法工具参数、Evidence 更新和小型 Python 补丁。
+- 提供一次 preflight 与五个一次性探针：阶段 Schema、合法工具参数、Evidence 更新、真实 Hypothesis Assessment 和可由本地 Patch Compiler 编译的小型 Python Patch Intent。
 - 生成记录 mode 且不包含 API Key、Authorization Header 或敏感响应正文的 Model Compatibility Report。
 - 自动化测试使用 FakeModelProvider 和伪 HTTP 服务验证同一 Provider 抽象。
 
@@ -48,13 +48,13 @@ ModelProvider 只依赖 OpenAI-compatible Chat Completions。Base URL 规范化�
 
 Generic Provider 不删除 reasoning 标签，也不按品牌关闭 reasoning。如果 `<think>` 或任何自然语言进入 `message.content`，`json_text` 明确失败。操作者可以显式提供少量 Endpoint Request Extensions；Provider 先构造标准 payload，拒绝其中的 `model`、`messages`、`stream`、`temperature` 和 `response_format` 后再合并，且不包含任何品牌判断。
 
-Model Compatibility Gate 在配置 mode 下最多发起一次 preflight 和四个相同探针，总请求数不超过五次。失败 fail-fast，产生非零退出码和脱敏报告；Diagnosis Run 不读取历史报告，也不以其作为授权条件。
+Model Compatibility Gate 在配置 mode 下最多发起一次 preflight 和五个相同探针，总请求数不超过六次。Hypothesis Assessment 探针直接复用 `HypothesisAssessmentDecision` 和运行时正向精确 Prompt，只允许 `outcome`、`evidence_refs`、`rationale` 三个键。失败 fail-fast，产生非零退出码和脱敏报告；Diagnosis Run 不读取历史报告，也不以其作为授权条件。
 
 ## Implementation Steps
 
 1. 定义 Structured Output Mode 与受控 Request Extensions，并把它们加入 Model Configuration 的显式环境配置。
 2. 为 native 与 json-text mode 构造不同请求，但复用响应解析和 Pydantic 校验。
-3. 保留五个 probe、fail-fast、Artifact 脱敏与 CLI 退出码合同，并在报告中记录 mode。
+3. 运行六个 probe，Assessment 复用真实阶段合同；保留 fail-fast、Artifact 脱敏与 CLI 退出码合同，并在报告中记录 mode。
 4. 增加两种 mode 的请求、严格失败、本地校验、Gate parity 与 CLI 回归测试。
 5. 同步领域词汇、设计、Specification 与 ADR。
 
@@ -66,7 +66,9 @@ Model Compatibility Gate 在配置 mode 下最多发起一次 preflight 和四�
 - [ ] `native_json_schema` 请求包含 `response_format.type=json_schema`、阶段 Schema 与 `strict=true`，并继续执行本地 Pydantic 校验。
 - [ ] `json_text` 请求不包含 `response_format`；纯 JSON 可通过，Markdown fence、`<think>` 加 JSON、自然语言加 JSON 和 Schema mismatch 均明确失败。
 - [ ] 两种 mode 都在 JSON 解析与 Pydantic validation 成功前阻止输出进入 Agent State，不做 fuzzy extraction 或 repair，单次失败不自动 retry。
-- [ ] 两种 mode 运行相同的一次 preflight 与四个能力探针，总请求数不超过五次，并保持 fail-fast。
+- [ ] 两种 mode 运行相同的一次 preflight 与五个能力探针，总请求数不超过六次，并保持 fail-fast。
+- [ ] Hypothesis Assessment probe 使用真实 `HypothesisAssessmentDecision`；额外字段在 Patch Intent probe 前产生 `schema_mismatch`。
+- [ ] Patch Intent probe 使用运行时 `PatchIntentDecision` 与确定性 Patch Compiler，不要求模型手写 unified diff，并验证编译后的代码行为。
 - [ ] Model Compatibility Report Schema 升级为版本 `2`，记录 `structured_output_mode`、脱敏 Endpoint、Model ID、请求配置、探针结果、原始响应引用和错误分类，但不包含 secret。
 - [ ] Gate 失败返回非零退出码，不创建或修改 Diagnosis Run 授权状态；默认测试不读取真实 API Key、不访问外部网络且不需要 GPU。
 
@@ -76,7 +78,7 @@ Model Compatibility Gate 在配置 mode 下最多发起一次 preflight 和四�
 - 对两种 mode 使用有效响应和 Schema mismatch，证明本地 Pydantic validation 始终执行。
 - 对 json-text mode 测试纯 JSON、fenced JSON、reasoning 标签、自然语言前缀，并断言没有第二次请求。
 - 测试空、合法、非法、非 object 和受保护键 Request Extensions，以及无 Provider/Model 名称推断的 payload 合并。
-- 对两种 mode 使用同一 FakeModelProvider probe fixture，验证五个 probe、调用顺序、fail-fast 与报告 mode。
+- 对两种 mode 使用同一 FakeModelProvider probe fixture，验证六个 probe、真实 Assessment/Patch Intent Schema、调用顺序、fail-fast 与报告 mode。
 - 用伪 HTTP 服务覆盖成功、超时、网络失败、非 JSON、错误状态码、缺失字段和 Schema mismatch。
 - 检查报告、Artifact、错误和 CLI 输出的脱敏与退出码；真实 Endpoint 检查只由操作者显式运行。
 

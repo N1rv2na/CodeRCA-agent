@@ -37,6 +37,7 @@ def test_task_2_freezes_independent_inputs_without_initial_root_location() -> No
     assert "keyfmt" not in manifest.model_dump_json()
     assert manifest.read_paths == ["waffle/"]
     assert manifest.write_paths == ["waffle/"]
+    assert manifest.tool_call_limit == 10
 
 
 def run_probe(workspace: Path) -> subprocess.CompletedProcess[str]:
@@ -86,12 +87,17 @@ def test_task_2_registered_probe_is_author_owned_and_reuses_image() -> None:
 
 
 @pytest.mark.parametrize(
-    "order", [("search_code", "read_code"), ("read_code", "search_code")]
+    "order",
+    [("search_code", "read_code"), ("read_code", "search_code"), ("read_code",)],
 )
+@pytest.mark.parametrize("repair_passes", [True, False])
 def test_task_2_autonomous_order_and_acceptance(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, order: tuple[str, str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    order: tuple[str, ...],
+    repair_passes: bool,
 ) -> None:
-    from coderca.task_2_acceptance import check_task_2_run
+    from coderca.task_2_acceptance import check_task_2_run, main
 
     workspace = benchmark.materialize_task_2(tmp_path / "workspace")
     manifest = benchmark.load_task_2_manifest()
@@ -123,23 +129,38 @@ def test_task_2_autonomous_order_and_acceptance(
         structured_responses={
             "form_hypothesis": {
                 "hypothesis": {
-                    "root_symbol": "keyfmt",
+                    "root_symbol": "Switch",
                     "location_description": "waffle/utils.py",
                     "mechanism": truth.defect_mechanism,
                     "falsification_criterion": "Cache keys preserve case.",
                 }
             },
-            "generate_patch": {
+            "generate_patch_intent": {
                 "hypothesis_id": "H1",
                 "target_path": "waffle/utils.py",
                 "mechanism": truth.reference_repair_behavior,
-                "unified_diff": (TASK / "reference.patch").read_text(),
+                "edits": [
+                    {
+                        "old_text": "k % v.lower()",
+                        "new_text": "k % v",
+                    }
+                ],
             },
             "generate_report": {
                 "trigger_condition": truth.trigger_condition,
                 "propagation_path": truth.propagation_path,
                 "failure_manifestation": truth.failure_manifestation,
                 "repair_recommendation": truth.reference_repair_behavior,
+                "location": {
+                    "path": "waffle/utils.py",
+                    "symbol": "keyfmt",
+                    "start_line": 25,
+                    "end_line": 25,
+                    "evidence_refs": [
+                        f"E{order.index('read_code') + 1}",
+                        f"E{len(order) + 1}",
+                    ],
+                },
             },
         },
         structured_response_sequences={
@@ -151,22 +172,44 @@ def test_task_2_autonomous_order_and_acceptance(
                     "direction": "supporting",
                     "explanation": truth.defect_mechanism,
                 }
-                for i in (1, 2)
+                for i in range(1, len(order) + 1)
             ],
-            "assess_hypothesis": [
-                {
-                    "outcome": "continue_testing",
-                    "evidence_refs": ["E1"],
-                    "rationale": "Need both caller and implementation evidence.",
-                },
-                {
-                    "outcome": "sufficiently_supported",
-                    "evidence_refs": ["E1", "E2"],
-                    "rationale": "Search links callers; code shows the collision.",
-                },
-            ],
+            "assess_hypothesis": (
+                [
+                    {
+                        "outcome": "continue_testing",
+                        "evidence_refs": ["E1"],
+                        "rationale": "Need both caller and implementation evidence.",
+                    },
+                    {
+                        "outcome": "sufficiently_supported",
+                        "evidence_refs": ["E1", "E2"],
+                        "rationale": "Search links callers; code shows the collision.",
+                    },
+                ]
+                if len(order) == 2
+                else [
+                    {
+                        "outcome": "sufficiently_supported",
+                        "evidence_refs": ["E1"],
+                        "rationale": "The actual implementation proves the collision.",
+                    }
+                ]
+            ),
         },
     )
+    correction_expected = order == ("read_code",) and repair_passes
+    if correction_expected:
+        valid_report = provider.structured_responses["generate_report"]
+        assert isinstance(valid_report, dict)
+        bad_report = {
+            **valid_report,
+            "location": {**valid_report["location"], "evidence_refs": ["E999"]},
+        }
+        provider.structured_response_sequences["generate_report"] = [
+            bad_report,
+            valid_report,
+        ]
     real_run = subprocess.run
 
     def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -176,6 +219,10 @@ def test_task_2_autonomous_order_and_acceptance(
                 p.removeprefix("src=") for p in mount.split(",") if p.startswith("src=")
             )
             assert "v.lower()" not in (Path(source) / "waffle/utils.py").read_text()
+            if not repair_passes:
+                return subprocess.CompletedProcess(
+                    argv, 1, stdout="validation deliberately failed\n"
+                )
             return subprocess.CompletedProcess(argv, 0, stdout="CRCA_TASK_2_OK\n")
         return real_run(argv, **kwargs)
 
@@ -192,33 +239,75 @@ def test_task_2_autonomous_order_and_acceptance(
             ),
         ),
     ).start_diagnosis(resolve_task_context(manifest, TASK))
-    assert result.validation is not None and result.validation.status == "passed"
+    assert result.validation is not None
+    assert result.validation.status == ("passed" if repair_passes else "failed")
     assert [o.source for o in result.observations] == [*order, "public_validation"]
-    assert check_task_2_run(result.run_directory)["structural_pass"] is True
+    checked = check_task_2_run(result.run_directory)
+    assert checked["outcome_pass"] is repair_passes, checked
+    assert checked["location"] == "hit"
+    assert checked["search_capability"] == (
+        "verified" if "search_code" in order else "not_demonstrated"
+    )
+    assert result.hypothesis_history[0].root_symbol == "Switch"
+    assert provider.structured_calls.count("generate_report") == (
+        2 if correction_expected else 1
+    )
+    assert main([str(result.run_directory)]) == (0 if repair_passes else 1)
+    assert main([str(result.run_directory), "--require-search"]) == (
+        0 if repair_passes and "search_code" in order else 1
+    )
+    assert checked["audit_error"] is None
+    if not repair_passes:
+        return
+    if order == ("read_code", "search_code"):
+        events = [
+            json.loads(line) for line in result.events_path.read_text().splitlines()
+        ]
+        assessment_event = [
+            event for event in events if event["event_type"] == "hypothesis_assessed"
+        ][-1]
+        assessment_path = (
+            result.run_directory / assessment_event["model_response_artifact"]
+        )
+        original_assessment = assessment_path.read_text()
+        assessment = json.loads(original_assessment)
+        assessment["evidence_refs"] = ["E1"]
+        assessment_path.write_text(json.dumps(assessment))
+        unused_search = check_task_2_run(result.run_directory)
+        assert unused_search["outcome_pass"] is True
+        assert unused_search["search_capability"] == "not_demonstrated"
+        assessment_path.write_text(original_assessment)
     report = json.loads(result.report_path.read_text())
-    report["final_hypothesis"]["root_symbol"] = "Switch"
+    report["root_cause_analysis"]["location"]["symbol"] = "Switch"
     result.report_path.write_text(json.dumps(report))
-    assert check_task_2_run(result.run_directory)["structural_pass"] is False
-    report["final_hypothesis"]["root_symbol"] = "keyfmt"
+    assert check_task_2_run(result.run_directory)["outcome_pass"] is False
+    report["root_cause_analysis"]["location"]["symbol"] = "keyfmt"
     result.report_path.write_text(json.dumps(report))
     original = result.report_path.read_text()
+    report["root_cause_analysis"].pop("location")
+    result.report_path.write_text(json.dumps(report))
+    assert check_task_2_run(result.run_directory)["location"] == "not_provided"
+    report = json.loads(original)
     report["evidence"] = [
         e for e in report["evidence"] if not e["provenance"].startswith("search_code:")
     ]
     result.report_path.write_text(json.dumps(report))
-    assert check_task_2_run(result.run_directory)["trajectory_pass"] is False
+    if "search_code" in order:
+        assert check_task_2_run(result.run_directory)["audit_error"]
     result.report_path.write_text(original)
     for field in ("validation", "patch"):
         broken = json.loads(original)
         broken[field] = None
         result.report_path.write_text(json.dumps(broken))
-        assert check_task_2_run(result.run_directory)["structural_pass"] is False
+        assert check_task_2_run(result.run_directory)["outcome_pass"] is False
     broken = json.loads(original)
     broken["validation"]["status"] = "failed"
     broken["validation"]["failure_message"] = "registered test failed"
     result.report_path.write_text(json.dumps(broken))
-    assert check_task_2_run(result.run_directory)["structural_pass"] is False
+    assert check_task_2_run(result.run_directory)["outcome_pass"] is False
     result.report_path.write_text(original)
+    if "search_code" not in order:
+        return
     search = next(o for o in result.observations if o.source == "search_code")
     search_path = result.run_directory / search.artifact_ref
     malformed_values: tuple[object, ...] = (
@@ -228,6 +317,6 @@ def test_task_2_autonomous_order_and_acceptance(
     )
     for malformed in malformed_values:
         search_path.write_text(json.dumps(malformed))
-        assert check_task_2_run(result.run_directory)["structural_pass"] is False
+        assert check_task_2_run(result.run_directory)["outcome_pass"] is False
     (result.run_directory / search.artifact_ref).unlink()
-    assert check_task_2_run(result.run_directory)["structural_pass"] is False
+    assert check_task_2_run(result.run_directory)["outcome_pass"] is False

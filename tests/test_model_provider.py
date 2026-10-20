@@ -108,6 +108,25 @@ def make_provider(
     )
 
 
+def test_request_audit_redacts_credentials_and_nested_extension_values() -> None:
+    provider = make_provider(
+        StubTransport({}), request_extensions='{"private":{"token":"extension-secret"}}'
+    )
+    artifact = provider.sanitize_request_artifact(
+        {
+            "system_prompt": "secret-key",
+            "working_context": {
+                "excerpt": "extension-secret and secret-key",
+                "ordinary": "keep this",
+            },
+        }
+    )
+    encoded = json.dumps(artifact.value)
+    assert "secret-key" not in encoded
+    assert "extension-secret" not in encoded
+    assert "keep this" in encoded
+
+
 def test_model_configuration_defaults_request_extensions_to_empty() -> None:
     assert hasattr(model_provider, "ModelConfiguration")
 

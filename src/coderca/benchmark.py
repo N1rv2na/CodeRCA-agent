@@ -61,7 +61,7 @@ def validate_task_1_inputs(manifest: TaskManifest) -> None:
         raise ValueError("CI log is not the frozen Task 1 failure artifact")
     if manifest.docker_image != DOCKER_IMAGE:
         raise ValueError("Docker image is not the frozen Task 1 image")
-    if manifest.tool_call_limit != 8:
+    if manifest.tool_call_limit != 10:
         raise ValueError("tool call limit is not the frozen Task 1 budget")
     for candidate in manifest.read_paths:
         if candidate.startswith("/") or ".." in Path(candidate).parts:
@@ -125,7 +125,7 @@ def load_task_2_manifest() -> TaskManifest:
         "docker_image": DOCKER_IMAGE,
         "read_paths": ["waffle/"],
         "write_paths": ["waffle/"],
-        "tool_call_limit": 8,
+        "tool_call_limit": 10,
     }
     if manifest.model_dump(mode="json") != expected:
         raise ValueError("manifest does not match the frozen Task 2 boundary")

@@ -1,175 +1,179 @@
-"""Author-only Task 2 acceptance; not an Agent tool or a general evaluator.
-
-Checks structural Outcome/Trajectory evidence. Causal correctness and meaningful
-use of search still require the documented human review, not keyword scoring.
-"""
+"""Author-only Task 2 Outcome and Search checks; causal review remains manual."""
 
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from .benchmark import load_task_2_manifest
 from .contracts import (
     DiagnosisEvent,
-    DiagnosisReport,
     HypothesisAssessmentDecision,
+    PublicValidationResult,
+)
+from .localization import (
+    artifact_path,
+    audit_evidence,
+    normalize_legacy_report,
+    read_persisted_report,
+    validate_location_sources,
 )
 from .tool_runtime import SearchCodeResult
 
+# Author-owned expectations, never sent to the model or used to fill its report.
+_ROOT_PATH = "waffle/utils.py"
+_ROOT_SYMBOLS = {"keyfmt", "waffle.utils.keyfmt"}
+_DEFECT_LINE = 25
+
 
 def check_task_2_run(directory: Path) -> dict[str, Any]:
-    """Fail closed on missing artifacts; never load truth into diagnosis context."""
-    directory = directory.resolve()
-
-    def artifact(ref: str) -> Path:
-        path = (directory / ref).resolve()
-        if Path(ref).is_absolute() or not path.is_relative_to(directory):
-            raise ValueError("artifact escapes Run Directory")
-        if not path.is_file():
-            raise ValueError(f"missing artifact: {ref}")
-        return path
-
+    result: dict[str, Any] = {
+        "location": "not_provided",
+        "repair_validation": "not_run",
+        "causal_review": "required",
+        "search_capability": "not_demonstrated",
+        "outcome_pass": False,
+        "human_review_required": True,
+        "audit_error": None,
+    }
     try:
-        report = DiagnosisReport.model_validate_json(
-            artifact("report.json").read_text()
+        report = read_persisted_report(
+            json.loads(artifact_path(directory, "report.json").read_text())
         )
         events = [
-            DiagnosisEvent.model_validate_json(line)
-            for line in artifact("events.jsonl").read_text().splitlines()
+            DiagnosisEvent.model_validate(normalize_legacy_report(json.loads(line)))
+            for line in artifact_path(directory, "events.jsonl")
+            .read_text()
+            .splitlines()
             if line.strip()
         ]
         manifest = load_task_2_manifest()
-        if json.loads(artifact("manifest.json").read_text()) != manifest.model_dump(
-            mode="json"
-        ):
+        if json.loads(
+            artifact_path(directory, "manifest.json").read_text()
+        ) != manifest.model_dump(mode="json"):
             raise ValueError("Run Manifest is not frozen Task 2")
         if report.task_id != manifest.task_id or any(
             e.run_id != report.run_id or e.task_id != report.task_id for e in events
         ):
             raise ValueError("inconsistent Run identity")
+        if [e.sequence for e in events] != list(range(1, len(events) + 1)):
+            raise ValueError("invalid event sequence")
+        if len({e.evidence_id for e in report.evidence}) != len(report.evidence):
+            raise ValueError("duplicate Evidence ID")
         final = report.final_hypothesis
-        outcome = bool(
+        if final and final not in report.hypothesis_history:
+            raise ValueError("final Hypothesis absent from history")
+        analysis = report.root_cause_analysis
+        if analysis and analysis.location:
+            if not final or final.status != "supported":
+                raise ValueError("final location requires supported Hypothesis")
+            validate_location_sources(
+                analysis.location,
+                final.hypothesis_id,
+                manifest,
+                report.evidence,
+                report.observations,
+                events,
+                directory,
+                evidence_basis=final.evidence_basis,
+            )
+            location = analysis.location
+            result["location"] = (
+                "hit"
+                if (
+                    location.path == _ROOT_PATH
+                    and location.symbol in _ROOT_SYMBOLS
+                    and location.start_line <= _DEFECT_LINE <= location.end_line
+                )
+                else "miss"
+            )
+        if report.validation:
+            validation = report.validation
+            if not final or validation.hypothesis_id != final.hypothesis_id:
+                raise ValueError("Validation does not bind final Hypothesis")
+            persisted = PublicValidationResult.model_validate_json(
+                artifact_path(directory, validation.artifact_ref).read_text()
+            )
+            if persisted != validation or not any(
+                e.validation == validation for e in events
+            ):
+                raise ValueError("Validation differs from recorded artifacts")
+            patch_text = artifact_path(
+                directory, validation.patch_artifact_ref
+            ).read_text()
+            if not report.patch or report.patch.hypothesis_id != final.hypothesis_id:
+                raise ValueError("missing or wrongly bound patch")
+            if patch_text != report.patch.unified_diff.rstrip("\n") + "\n":
+                raise ValueError("patch artifact mismatch")
+            for check in (validation.static_check, validation.registered_test):
+                if check:
+                    artifact_path(directory, check.artifact_ref)
+            result["repair_validation"] = validation.status
+
+        used: set[str] = set()
+        for hypothesis in report.hypothesis_history:
+            used.update(hypothesis.evidence_basis)
+        if analysis and analysis.location:
+            used.update(analysis.location.evidence_refs)
+        for event in events:
+            if event.event_type != "hypothesis_assessed":
+                continue
+            if not event.model_response_artifact:
+                raise ValueError("assessment missing response artifact")
+            raw = json.loads(
+                artifact_path(directory, event.model_response_artifact).read_text()
+            )
+            if isinstance(raw, dict) and "choices" in raw:
+                raw = json.loads(raw["choices"][0]["message"]["content"])
+            used.update(HypothesisAssessmentDecision.model_validate(raw).evidence_refs)
+        if not used.issubset({e.evidence_id for e in report.evidence}):
+            raise ValueError("decision references missing Evidence")
+        for evidence in report.evidence:
+            observation, _, content = audit_evidence(
+                evidence, report.observations, events, directory
+            )
+            if observation.source == "search_code":
+                search = SearchCodeResult.model_validate_json(content)
+                if (
+                    search.status == "matched"
+                    and search.matches
+                    and evidence.evidence_id in used
+                ):
+                    result["search_capability"] = "verified"
+        for observation in report.observations:
+            artifact_path(directory, observation.artifact_ref)
+        result["outcome_pass"] = bool(
             report.status == "completed"
             and final
             and final.status == "supported"
-            and final.root_symbol in ("keyfmt", "waffle.utils.keyfmt")
-            and report.patch
-            and report.patch.hypothesis_id == final.hypothesis_id
-            and report.validation
-            and report.validation.status == "passed"
-            and report.validation.hypothesis_id == final.hypothesis_id
-            and report.root_cause_analysis
+            and result["location"] == "hit"
+            and result["repair_validation"] == "passed"
+            and analysis
         )
-        if report.validation:
-            artifact(report.validation.artifact_ref)
-            artifact(report.validation.patch_artifact_ref)
-            for check in (
-                report.validation.static_check,
-                report.validation.registered_test,
-            ):
-                if check:
-                    artifact(check.artifact_ref)
-        used: set[str] = set()
-        for event in events:
-            if (
-                event.event_type != "hypothesis_assessed"
-                or not event.model_response_artifact
-            ):
-                continue
-            if not final or not any(
-                h.hypothesis_id == final.hypothesis_id and h.status == "supported"
-                for h in event.hypothesis_history
-            ):
-                continue
-            raw = json.loads(artifact(event.model_response_artifact).read_text())
-            # Existing Fake and HTTP providers persist different envelope shapes.
-            if "choices" in raw:
-                raw = json.loads(raw["choices"][0]["message"]["content"])
-            assessment = HypothesisAssessmentDecision.model_validate(raw)
-            used.update(assessment.evidence_refs)
-        sources: set[str] = set()
-        # Reformulation can carry earlier rejected-H knowledge into the final H.
-        relevant_hypotheses = {final.hypothesis_id} if final else set()
-        if final:
-            used.update(final.evidence_basis)
-        for hypothesis in reversed(report.hypothesis_history):
-            if hypothesis.hypothesis_id in relevant_hypotheses:
-                used.update(hypothesis.evidence_basis)
-            relevant_hypotheses.update(
-                e.hypothesis_id for e in report.evidence if e.evidence_id in used
-            )
-        for evidence in report.evidence:
-            if not final or evidence.evidence_id not in used:
-                continue
-            observation = next(
-                (
-                    o
-                    for o in report.observations
-                    if o.observation_id == evidence.observation_ref
-                ),
-                None,
-            )
-            if (
-                observation is None
-                or observation.hypothesis_id != evidence.hypothesis_id
-            ):
-                continue
-            artifact(observation.artifact_ref)
-            for event in events:
-                result, experiment = event.tool_result, event.experiment
-                if not result or not experiment:
-                    continue
-                if (
-                    result.tool_result_id == observation.tool_result_ref
-                    and result.status == "success"
-                    and result.artifact_ref == observation.artifact_ref
-                    and result.hypothesis_id
-                    == experiment.hypothesis_id
-                    == evidence.hypothesis_id
-                    and result.experiment_id
-                    == experiment.experiment_id
-                    == observation.experiment_id
-                    and result.tool_name == experiment.tool_name == observation.source
-                    and evidence.provenance
-                    == f"{observation.source}:{observation.artifact_ref}"
-                ):
-                    if observation.source == "search_code":
-                        search = SearchCodeResult.model_validate_json(
-                            artifact(observation.artifact_ref).read_text()
-                        )
-                        if search.status != "matched" or not search.matches:
-                            continue
-                    sources.add(observation.source)
-        trajectory = "search_code" in sources and bool(
-            sources & {"read_code", "inspect_diff"}
-        )
-        return {
-            "outcome_pass": outcome,
-            "trajectory_pass": trajectory,
-            "trajectory_review": (
-                "linked_evidence" if trajectory else "not_proven_by_structured_refs"
-            ),
-            "structural_pass": outcome and trajectory,
-            "human_review_required": True,
-        }
     except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
-        return {
-            "structural_pass": False,
-            "human_review_required": True,
-            "error": str(exc),
-        }
+        result["audit_error"] = str(exc)
+        result["search_capability"] = "invalid_trajectory"
+        result["outcome_pass"] = False
+    return result
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_directory", type=Path)
-    args = parser.parse_args()
+    parser.add_argument(
+        "--require-search",
+        action="store_true",
+        help="Additionally require demonstrated search contribution",
+    )
+    args = parser.parse_args(argv)
     result = check_task_2_run(args.run_directory)
     print(json.dumps(result, sort_keys=True))
-    return 0 if result["structural_pass"] else 1
+    passed = result["outcome_pass"] and not result["audit_error"]
+    if args.require_search:
+        passed = passed and result["search_capability"] == "verified"
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

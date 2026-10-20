@@ -11,7 +11,13 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, model_validator
 
-from .contracts import ContractModel, NonEmptyString
+from .contracts import (
+    ContractModel,
+    HypothesisAssessmentDecision,
+    NonEmptyString,
+    PatchIntentDecision,
+)
+from .decision_prompts import HYPOTHESIS_ASSESSMENT_SYSTEM_PROMPT
 from .model_provider import (
     ModelConfiguration,
     ModelFailureCategory,
@@ -20,6 +26,7 @@ from .model_provider import (
     StructuredModelResponse,
     StructuredOutputMode,
 )
+from .patch_compiler import PatchIntentCompilationError, compile_candidate_patch
 
 
 class PreflightProbe(ContractModel):
@@ -64,13 +71,6 @@ class EvidenceUpdateProbe(ContractModel):
     rationale: NonEmptyString
 
 
-class PythonPatchProbe(ContractModel):
-    hypothesis_id: Literal["H1"]
-    target_path: Literal["sample.py"]
-    mechanism: NonEmptyString
-    unified_diff: NonEmptyString
-
-
 class GateRequestConfiguration(ContractModel):
     stream: Literal[False] = False
     temperature: Literal[0] = 0
@@ -93,7 +93,7 @@ class ModelCompatibilityReport(ContractModel):
     request_configuration: GateRequestConfiguration
     compatible: bool
     failure_category: ModelFailureCategory | None = None
-    probes: list[ProbeResult] = Field(min_length=1, max_length=5)
+    probes: list[ProbeResult] = Field(min_length=1, max_length=6)
 
 
 class ProbeDefinition(ContractModel):
@@ -118,7 +118,7 @@ def run_model_compatibility_gate(
     configuration: ModelConfiguration,
     output_directory: Path,
 ) -> ModelCompatibilityReport:
-    """Run at most five advisory probes and persist a redacted report."""
+    """Run at most six advisory probes and persist a redacted report."""
 
     output_directory = Path(output_directory)
     response_directory = output_directory / "responses"
@@ -175,15 +175,32 @@ def run_model_compatibility_gate(
         ),
         (
             ProbeDefinition(
-                name="python_patch",
+                name="hypothesis_assessment",
+                system_prompt=HYPOTHESIS_ASSESSMENT_SYSTEM_PROMPT,
+                user_prompt=(
+                    "Active Hypothesis H1 claims explicit False is ignored by a "
+                    "truthiness guard. Registered Evidence E1 is inconclusive. A "
+                    "bounded read_code Experiment remains available, and both the "
+                    "Experiment and Tool budgets have capacity. Assess H1 as "
+                    "continue_testing, cite only E1, and explain why another "
+                    "Experiment is warranted."
+                ),
+            ),
+            HypothesisAssessmentDecision,
+        ),
+        (
+            ProbeDefinition(
+                name="python_patch_intent",
                 system_prompt=_SYSTEM_PROMPT,
                 user_prompt=(
-                    "For Hypothesis H1, generate a unified diff for sample.py that "
-                    "changes this function so configured=0 is preserved:\n"
+                    "For Hypothesis H1, propose one exact-replacement Patch Intent "
+                    "for sample.py that changes this function so configured=0 is "
+                    "preserved. Copy old_text exactly from this source and do not "
+                    "generate a unified diff:\n"
                     f"{_PATCH_SOURCE}"
                 ),
             ),
-            PythonPatchProbe,
+            PatchIntentDecision,
         ),
     )
 
@@ -200,8 +217,8 @@ def run_model_compatibility_gate(
             response = structured_response.value
             if definition.name == "preflight":
                 _validate_preflight(response, configuration.model_id)
-            elif definition.name == "python_patch":
-                _validate_python_patch(response)
+            elif definition.name == "python_patch_intent":
+                _validate_python_patch_intent(response)
             artifact = _write_original_response_artifact(
                 response_directory,
                 definition.name,
@@ -274,18 +291,22 @@ def _validate_preflight(response: BaseModel, expected_model_id: str) -> None:
         )
 
 
-def _validate_python_patch(response: BaseModel) -> None:
-    if not isinstance(response, PythonPatchProbe):
+def _validate_python_patch_intent(response: BaseModel) -> None:
+    if not isinstance(response, PatchIntentDecision):
         raise ModelProviderError(
-            "schema_mismatch", "The patch probe returned the wrong contract."
+            "schema_mismatch", "The Patch Intent probe returned the wrong contract."
         )
     try:
-        patched = _apply_single_hunk(_PATCH_SOURCE, response.unified_diff)
+        if response.hypothesis_id != "H1" or response.target_path != "sample.py":
+            raise ValueError("Patch Intent does not bind the probe fixture")
+        candidate = compile_candidate_patch(_PATCH_SOURCE, response)
+        patched = _apply_single_hunk(_PATCH_SOURCE, candidate.unified_diff)
         tree = ast.parse(patched, filename=response.target_path)
         _validate_patch_behavior(tree)
-    except (SyntaxError, ValueError) as exc:
+    except (PatchIntentCompilationError, SyntaxError, ValueError) as exc:
         raise ModelProviderError(
-            "patch_not_applicable", "The probe patch is not applicable Python."
+            "patch_not_applicable",
+            "The probe Patch Intent is not applicable Python.",
         ) from exc
 
 
@@ -362,9 +383,14 @@ def _apply_single_hunk(source: str, unified_diff: str) -> str:
     lines = unified_diff.splitlines()
     if len(lines) < 4 or lines[0] != "--- a/sample.py" or lines[1] != "+++ b/sample.py":
         raise ValueError("patch headers do not target sample.py")
-    match = re.fullmatch(r"@@ -(\d+),(\d+) \+(\d+),(\d+) @@", lines[2])
+    match = re.fullmatch(
+        r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", lines[2]
+    )
     if match is None or int(match.group(1)) != int(match.group(3)):
         raise ValueError("unsupported patch hunk")
+
+    removed_count = int(match.group(2) or 1)
+    added_count = int(match.group(4) or 1)
 
     source_lines = source.splitlines()
     source_index = int(match.group(1)) - 1
@@ -386,7 +412,7 @@ def _apply_single_hunk(source: str, unified_diff: str) -> str:
         if marker in " +":
             output.append(content)
             added += 1
-    if removed != int(match.group(2)) or added != int(match.group(4)):
+    if removed != removed_count or added != added_count:
         raise ValueError("patch hunk counts do not match")
     output.extend(source_lines[source_index:])
     return "\n".join(output) + "\n"

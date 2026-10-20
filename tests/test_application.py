@@ -11,9 +11,32 @@ from coderca.application import DiagnosisApplicationService
 from coderca.benchmark import load_task_1_manifest, materialize_task_1
 from coderca.context_builder import DiagnosisTaskContext
 from coderca.contracts import RegisteredTestCommand, TaskManifest
-from coderca.model_provider import FakeModelProvider
+from coderca.model_provider import FakeModelProvider, ModelProviderError
 from coderca.run_store import RunStore
 from coderca.tool_runtime import ToolRuntime
+
+
+def test_formation_network_failure_has_audited_request_without_response_link(
+    tmp_path: Path,
+    valid_manifest_data: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeModelProvider()
+
+    def fail(**kwargs: Any) -> Any:
+        raise ModelProviderError("network_error", "offline")
+
+    monkeypatch.setattr(provider, "generate_structured", fail)
+    result = DiagnosisApplicationService(
+        provider=provider, run_store=RunStore(tmp_path / "runs")
+    ).start_diagnosis(resolved_task(valid_manifest_data))
+    snapshot = json.loads(
+        (
+            result.run_directory / "model-requests" / "form-hypothesis-attempt-1.json"
+        ).read_text()
+    )
+    assert snapshot["response_artifact"] is None
+    assert snapshot["working_context"]
 
 
 def proposal_payload(symbol: str = "package.module.select_value") -> dict[str, object]:
@@ -25,12 +48,13 @@ def proposal_payload(symbol: str = "package.module.select_value") -> dict[str, o
     }
 
 
-def report_payload() -> dict[str, str]:
+def report_payload() -> dict[str, object]:
     return {
         "trigger_condition": "The configuration stores an explicit false value.",
         "propagation_path": "The truthiness branch falls through to the default path.",
         "failure_manifestation": "The registered test observes true instead of false.",
         "repair_recommendation": "Preserve explicit false values with a None check.",
+        "location": None,
     }
 
 
@@ -89,14 +113,11 @@ def test_run_tests_experiment_flows_through_observation_evidence_and_report(
                 "evidence_refs": ["E1"],
                 "rationale": "The real test Observation supports H1.",
             },
-            "generate_patch": {
+            "generate_patch_intent": {
                 "hypothesis_id": "H1",
                 "target_path": "src/module.py",
                 "mechanism": "Preserve explicit false values.",
-                "unified_diff": (
-                    "--- a/src/module.py\n+++ b/src/module.py\n@@ -1 +1 @@\n"
-                    "-value = True\n+value = False\n"
-                ),
+                "edits": [{"old_text": "True", "new_text": "False"}],
             },
             "generate_report": report_payload(),
         }
@@ -113,9 +134,7 @@ def test_run_tests_experiment_flows_through_observation_evidence_and_report(
             )
         del kwargs
         if any("compile(source" in item for item in docker_command):
-            return subprocess.CompletedProcess(
-                docker_command, 0, stdout="STATIC_OK\n"
-            )
+            return subprocess.CompletedProcess(docker_command, 0, stdout="STATIC_OK\n")
         mount = docker_command[docker_command.index("--mount") + 1]
         mounted = Path(
             next(
@@ -125,9 +144,7 @@ def test_run_tests_experiment_flows_through_observation_evidence_and_report(
             )
         )
         if (mounted / "src/module.py").read_text() == "value = False\n":
-            return subprocess.CompletedProcess(
-                docker_command, 0, stdout="1 passed\n"
-            )
+            return subprocess.CompletedProcess(docker_command, 0, stdout="1 passed\n")
         return subprocess.CompletedProcess(
             docker_command,
             1,
@@ -217,23 +234,18 @@ def test_supported_hypothesis_generates_one_patch_and_finalizes_after_validation
                 "evidence_refs": ["E1"],
                 "rationale": "E1 supports H1.",
             },
-            "generate_patch": {
+            "generate_patch_intent": {
                 "hypothesis_id": "H1",
                 "target_path": "src/module.py",
                 "mechanism": "Preserve the false value.",
-                "unified_diff": (
-                    "--- a/src/module.py\n+++ b/src/module.py\n@@ -1 +1 @@\n"
-                    "-value = True\n+value = False\n"
-                ),
+                "edits": [{"old_text": "True", "new_text": "False"}],
             },
             "generate_report": report_payload(),
         }
     )
     real_run = subprocess.run
 
-    def run(
-        command_line: list[str], **kwargs: Any
-    ) -> subprocess.CompletedProcess[str]:
+    def run(command_line: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         if command_line[0] == "git":
             return cast(
                 subprocess.CompletedProcess[str], real_run(command_line, **kwargs)
@@ -276,9 +288,7 @@ def test_supported_hypothesis_generates_one_patch_and_finalizes_after_validation
     assert result.validation is not None
     assert result.validation.status == expected_validation_status
     assert result.root_cause_analysis is not None
-    assert result.root_cause_analysis.trigger_condition.startswith(
-        "The configuration"
-    )
+    assert result.root_cause_analysis.trigger_condition.startswith("The configuration")
     assert [item.source for item in result.observations] == [
         "read_code",
         "public_validation",
@@ -290,8 +300,11 @@ def test_supported_hypothesis_generates_one_patch_and_finalizes_after_validation
         "supporting",
         "supporting" if expected_validation_status == "passed" else "inconclusive",
     ]
-    assert provider.structured_calls.count("generate_patch") == 1
-    assert provider.structured_calls[-2:] == ["generate_patch", "generate_report"]
+    assert provider.structured_calls.count("generate_patch_intent") == 1
+    assert provider.structured_calls[-2:] == [
+        "generate_patch_intent",
+        "generate_report",
+    ]
     assert source.read_text() == "value = True\n"
     report = json.loads(result.report_path.read_text())
     assert report["patch"]["hypothesis_id"] == "H1"
@@ -313,12 +326,135 @@ def test_supported_hypothesis_generates_one_patch_and_finalizes_after_validation
     assert not any(
         event["stage"] == "diagnosing"
         for event in events
-        if event["sequence"] > next(
+        if event["sequence"]
+        > next(
             item["sequence"]
             for item in events
             if item["event_type"] == "validation_completed"
         )
     )
+
+
+@pytest.mark.parametrize("corrected", [True, False])
+def test_patch_intent_compilation_uses_one_bounded_correction_before_candidate(
+    tmp_path: Path,
+    valid_manifest_data: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    corrected: bool,
+) -> None:
+    workspace = tmp_path / "workspace"
+    source = workspace / "src" / "module.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = True\n")
+    manifest_data = dict(valid_manifest_data)
+    manifest_data["read_paths"] = ["src/"]
+    manifest_data["write_paths"] = ["src/module.py"]
+    task = resolved_task(manifest_data)
+    command = RegisteredTestCommand(
+        schema_version="1",
+        command_id=str(manifest_data["test_command_id"]),
+        argv=("python", "-m", "pytest", "-q"),
+        static_check_argv=("python", "-m", "compileall", "-q", "src"),
+        timeout_seconds=30,
+    )
+    invalid_intent = {
+        "hypothesis_id": "H1",
+        "target_path": "src/module.py",
+        "mechanism": "Replace a missing source fragment.",
+        "edits": [{"old_text": "missing", "new_text": "False"}],
+    }
+    valid_intent = {
+        "hypothesis_id": "H1",
+        "target_path": "src/module.py",
+        "mechanism": "Preserve the false value.",
+        "edits": [{"old_text": "True", "new_text": "False"}],
+    }
+    provider = FakeModelProvider(
+        structured_responses={
+            "form_hypothesis": {"hypothesis": proposal_payload("module.value")},
+            "select_experiment": {
+                "hypothesis_id": "H1",
+                "purpose": "Read the faulty value.",
+                "expected_observation": "The value is true.",
+                "falsification_relevance": "A false value would falsify H1.",
+                "tool_name": "read_code",
+                "arguments": {"path": "src/module.py", "start_line": 1, "end_line": 1},
+            },
+            "update_evidence": {
+                "hypothesis_id": "H1",
+                "observation_ref": "O1",
+                "direction": "supporting",
+                "explanation": "The source contains the faulty truthy value.",
+            },
+            "assess_hypothesis": {
+                "outcome": "sufficiently_supported",
+                "evidence_refs": ["E1"],
+                "rationale": "E1 supports H1.",
+            },
+            "generate_report": report_payload(),
+        },
+        structured_response_sequences={
+            "generate_patch_intent": [
+                invalid_intent,
+                valid_intent if corrected else invalid_intent,
+            ]
+        },
+    )
+    real_run = subprocess.run
+
+    def run(command_line: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if command_line[0] == "git":
+            return cast(
+                subprocess.CompletedProcess[str], real_run(command_line, **kwargs)
+            )
+        return subprocess.CompletedProcess(command_line, 0, stdout="PASS\n")
+
+    monkeypatch.setattr("coderca.tool_runtime.subprocess.run", run)
+    result = DiagnosisApplicationService(
+        provider=provider,
+        run_store=RunStore(tmp_path / "runs"),
+        tool_runtime=ToolRuntime(
+            workspace,
+            task.manifest,
+            registered_test_command=command,
+            enforce_faulty_commit=False,
+        ),
+    ).start_diagnosis(task)
+
+    assert provider.structured_calls.count("generate_patch_intent") == 2
+    events = [json.loads(line) for line in result.events_path.read_text().splitlines()]
+    corrections = [
+        event
+        for event in events
+        if event["event_type"] == "schema_correction_requested"
+        and "generate_patch_intent" in event["message"]
+    ]
+    assert len(corrections) == 1
+    assert corrections[0]["validation_errors"][0]["type"] == "missing_match"
+    corrected_request = next(
+        request
+        for request in provider.structured_requests[1:]
+        if request["schema_name"] == "generate_patch_intent"
+        and "schema_correction" in json.loads(request["user_prompt"])
+    )
+    assert json.loads(corrected_request["user_prompt"])["schema_correction"]
+
+    if corrected:
+        assert result.stop_reason == "validation_passed"
+        assert result.patch is not None
+        assert sum(event["event_type"] == "patch_generated" for event in events) == 1
+        assert (
+            sum(event["event_type"] == "validation_completed" for event in events)
+            == 1
+        )
+    else:
+        assert result.status == "failed"
+        assert result.stop_reason == "schema_failure"
+        assert result.patch is None
+        assert not any(event["event_type"] == "patch_generated" for event in events)
+        assert not any(
+            event["event_type"] == "validation_completed" for event in events
+        )
 
 
 def test_supported_hypothesis_does_not_patch_after_tool_budget_is_exhausted(
@@ -385,7 +521,7 @@ def test_supported_hypothesis_does_not_patch_after_tool_budget_is_exhausted(
     assert result.stop_reason == "tool_budget_exhausted"
     assert result.patch is None
     assert result.validation is None
-    assert "generate_patch" not in provider.structured_calls
+    assert "generate_patch_intent" not in provider.structured_calls
 
 
 def test_start_diagnosis_forms_only_h1_and_persists_observable_artifacts(
@@ -445,6 +581,8 @@ def test_formation_context_is_reconstructed_from_resolved_task_not_raw_history(
         "hypothesis_history": [],
         "remaining_hypothesis_budget": 3,
         "remaining_tool_budget": valid_manifest_data["tool_call_limit"],
+            "used_experiment_budget": 0,
+            "remaining_experiment_budget": 3,
         "stage": "forming_hypothesis",
     }
     failure = context["task_context"]["ci_failure"]
@@ -648,9 +786,7 @@ def test_search_code_flows_through_existing_observation_and_evidence_pipeline(
     task = resolved_task(manifest_data)
     provider = FakeModelProvider(
         {
-            "form_hypothesis": {
-                "hypothesis": proposal_payload("flags.is_active")
-            },
+            "form_hypothesis": {"hypothesis": proposal_payload("flags.is_active")},
             "select_experiment": {
                 "hypothesis_id": "H1",
                 "purpose": "Find the implementation named by H1.",
@@ -707,9 +843,7 @@ def test_search_code_flows_through_existing_observation_and_evidence_pipeline(
         if request["schema_name"] == "select_experiment"
     )
     select_context = json.loads(select_request["user_prompt"])
-    assert "search_code" in {
-        tool["name"] for tool in select_context["available_tools"]
-    }
+    assert "search_code" in {tool["name"] for tool in select_context["available_tools"]}
 
 
 def test_rejected_h1_reformulates_h2_from_registered_evidence(
@@ -822,7 +956,43 @@ def test_rejected_h1_reformulates_h2_from_registered_evidence(
     assert (
         context["reformulation_knowledge"]["observations"][0]["observation_id"] == "O1"
     )
+    assert "read_code" in {tool["name"] for tool in context["available_tools"]}
+    assert "testable with available_tools" in reformulation_request["system_prompt"]
     assert "if self.everyone" not in reformulation_request["user_prompt"]
+    h2_update_request = next(
+        request
+        for request in provider.structured_requests
+        if request["schema_name"] == "update_evidence"
+        and json.loads(request["user_prompt"])["active_hypothesis"][
+            "hypothesis_id"
+        ]
+        == "H2"
+    )
+    h2_update_context = json.loads(h2_update_request["user_prompt"])
+    assert [
+        item["evidence_id"]
+        for item in h2_update_context["evidence_basis_knowledge"]["evidence"]
+    ] == ["E1"]
+    assert h2_update_context["existing_relevant_evidence"] == []
+    assert "Evidence Basis Knowledge" in h2_update_request["system_prompt"]
+    h2_assessment_request = next(
+        request
+        for request in provider.structured_requests
+        if request["schema_name"] == "assess_hypothesis"
+        and json.loads(request["user_prompt"])["active_hypothesis"][
+            "hypothesis_id"
+        ]
+        == "H2"
+    )
+    h2_assessment_context = json.loads(h2_assessment_request["user_prompt"])
+    assert [
+        item["evidence_id"]
+        for item in h2_assessment_context["evidence_basis_knowledge"]["evidence"]
+    ] == ["E1"]
+    assert [
+        item["evidence_id"] for item in h2_assessment_context["relevant_evidence"]
+    ] == ["E2"]
+    assert "Evidence Basis Knowledge" in h2_assessment_request["system_prompt"]
 
 
 def test_loop_decision_allows_one_schema_correction_without_raw_history(
@@ -888,6 +1058,52 @@ def test_loop_decision_allows_one_schema_correction_without_raw_history(
     corrected_context = json.loads(update_requests[1]["user_prompt"])
     assert corrected_context["schema_correction"]["attempt"] == 2
     assert "raw_response" not in corrected_context
+    snapshots = [
+        json.loads(p.read_text())
+        for p in (result.run_directory / "model-requests").glob("*.json")
+    ]
+    updates = [s for s in snapshots if s["decision_type"] == "update_evidence"]
+    assert len(updates) == 2
+    assert sorted(s["attempt"] for s in updates) == [1, 2]
+    assert all("response_schema" in s for s in updates)
+    assert all("uninspected" in s["system_prompt"] for s in updates)
+    assert all(
+        "relative to the Active Hypothesis mechanism" in s["system_prompt"]
+        for s in updates
+    )
+    assert all(
+        "concrete alternative mechanism" in s["system_prompt"] for s in updates
+    )
+    assessment_requests = [
+        r
+        for r in provider.structured_requests
+        if r["schema_name"] == "assess_hypothesis"
+    ]
+    assessment_prompt = assessment_requests[0]["system_prompt"]
+    assert "Do not relabel" in assessment_prompt
+    assert (
+        "feasible non-redundant Experiment" in assessment_prompt
+    )
+    assert (
+        "exactly these three keys: outcome, evidence_refs, rationale"
+        in assessment_prompt
+    )
+    assert '"outcome": "continue_testing"' in assessment_prompt
+    assert '"evidence_refs": ["E1"]' in assessment_prompt
+    assert '"rationale": "Explain the assessment from registered Evidence."' in (
+        assessment_prompt
+    )
+    assert "note fields" not in assessment_prompt
+    select_requests = [
+        r
+        for r in provider.structured_requests
+        if r["schema_name"] == "select_experiment"
+    ]
+    assert "observation_capabilities" in select_requests[0]["system_prompt"]
+    assert "instrumentation" in select_requests[0]["system_prompt"]
+    assert all(
+        (result.run_directory / s["response_artifact"]).is_file() for s in updates
+    )
     events = [json.loads(line) for line in result.events_path.read_text().splitlines()]
     assert any(event["event_type"] == "schema_correction_requested" for event in events)
 
@@ -967,9 +1183,9 @@ def test_unknown_tool_selection_is_corrected_before_budget_or_runtime_execution(
         "read_code",
         "search_code",
     ]
-    assert corrected_context["schema_correction"]["validation_errors"][0][
-        "loc"
-    ] == ["tool_name"]
+    assert corrected_context["schema_correction"]["validation_errors"][0]["loc"] == [
+        "tool_name"
+    ]
     events = [json.loads(line) for line in result.events_path.read_text().splitlines()]
     tool_events = [event for event in events if event["event_type"] == "tool_executed"]
     assert len(tool_events) == 1
@@ -1017,9 +1233,10 @@ def test_second_unknown_tool_selection_fails_without_runtime_execution(
     assert result.evidence == ()
     assert provider.structured_calls.count("select_experiment") == 2
     events = [json.loads(line) for line in result.events_path.read_text().splitlines()]
-    assert sum(
-        event["event_type"] == "schema_correction_requested" for event in events
-    ) == 1
+    assert (
+        sum(event["event_type"] == "schema_correction_requested" for event in events)
+        == 1
+    )
     assert not any(event["event_type"] == "tool_executed" for event in events)
     assert not (result.run_directory / "tool-results").exists()
 
@@ -1097,12 +1314,12 @@ def test_observation_id_in_assessment_is_corrected_before_state_mutation(
     assert error["allowed_evidence_ids"] == ["E1"]
     events = [json.loads(line) for line in result.events_path.read_text().splitlines()]
     assert (
-        len([event for event in events if event["event_type"] == "tool_executed"])
+        len([event for event in events if event["event_type"] == "tool_executed"]) == 1
+    )
+    assert (
+        len([event for event in events if event["event_type"] == "evidence_recorded"])
         == 1
     )
-    assert len(
-        [event for event in events if event["event_type"] == "evidence_recorded"]
-    ) == 1
 
 
 def test_second_invalid_loop_decision_finalizes_with_preserved_history(
@@ -1221,14 +1438,16 @@ def test_h3_inconclusive_stops_without_forming_h4(
     assert provider.structured_calls.count("reformulate_hypothesis") == 2
 
 
-def test_eight_tool_calls_stop_before_a_ninth_execution(
+def test_three_experiments_force_terminal_assessment_before_a_fourth_execution(
     tmp_path: Path, valid_manifest_data: dict[str, object]
 ) -> None:
     workspace = tmp_path / "workspace"
     source = workspace / "src" / "module.py"
     source.parent.mkdir(parents=True)
     source.write_text("value = 1\n")
-    manifest = TaskManifest.model_validate(valid_manifest_data)
+    manifest = TaskManifest.model_validate(
+        {**valid_manifest_data, "tool_call_limit": 3}
+    )
     select = {
         "hypothesis_id": "H1",
         "purpose": "Inspect another bounded code fact.",
@@ -1242,7 +1461,7 @@ def test_eight_tool_calls_stop_before_a_ninth_execution(
             "form_hypothesis": {"hypothesis": proposal_payload("module.h1")}
         },
         structured_response_sequences={
-            "select_experiment": [select.copy() for _ in range(8)],
+            "select_experiment": [select.copy() for _ in range(3)],
             "update_evidence": [
                 {
                     "hypothesis_id": "H1",
@@ -1250,7 +1469,7 @@ def test_eight_tool_calls_stop_before_a_ninth_execution(
                     "direction": "inconclusive",
                     "explanation": "This fact alone is not decisive.",
                 }
-                for index in range(1, 9)
+                for index in range(1, 4)
             ],
             "assess_hypothesis": [
                 {
@@ -1258,7 +1477,23 @@ def test_eight_tool_calls_stop_before_a_ninth_execution(
                     "evidence_refs": [f"E{index}"],
                     "rationale": "Another discriminating Experiment is needed.",
                 }
-                for index in range(1, 9)
+                for index in range(1, 4)
+            ]
+            + [
+                {
+                    "outcome": "inconclusive",
+                    "evidence_refs": ["E3"],
+                    "rationale": "The per-Hypothesis Experiment budget is exhausted.",
+                }
+            ],
+            "reformulate_hypothesis": [
+                {
+                    "hypothesis": {
+                        **proposal_payload("module.h2"),
+                        "mechanism": "A materially different second mechanism.",
+                    },
+                    "evidence_refs": ["E3"],
+                }
             ],
         },
     )
@@ -1267,13 +1502,21 @@ def test_eight_tool_calls_stop_before_a_ninth_execution(
         provider=provider,
         run_store=RunStore(tmp_path / "runs"),
         tool_runtime=ToolRuntime(workspace, manifest, enforce_faulty_commit=False),
-    ).start_diagnosis(resolved_task(valid_manifest_data))
+    ).start_diagnosis(
+        DiagnosisTaskContext(
+            manifest=manifest,
+            ci_failure_excerpt="AssertionError",
+            ci_failure_artifact=manifest.ci_log,
+        )
+    )
 
     assert result.status == "completed"
     assert result.stop_reason == "tool_budget_exhausted"
-    assert len(result.observations) == 8
-    assert len(result.evidence) == 8
-    assert provider.structured_calls.count("select_experiment") == 8
+    assert len(result.observations) == 3
+    assert len(result.evidence) == 3
+    assert provider.structured_calls.count("select_experiment") == 3
+    assert provider.structured_calls.count("assess_hypothesis") == 4
+    assert result.hypothesis_history[0].status == "inconclusive"
 
 
 def test_tool_contract_failure_preserves_tool_category_without_misclassifying_run(

@@ -12,14 +12,17 @@ import pytest
 
 from coderca.benchmark import load_task_1_manifest, materialize_task_1
 from coderca.contracts import (
+    CandidatePatch,
+    ExactReplacement,
     Experiment,
-    PatchDecision,
+    PatchIntentDecision,
     PatchValidationAction,
     PublicValidationResult,
     RegisteredTestCommand,
     TaskManifest,
     ToolResult,
 )
+from coderca.patch_compiler import PatchIntentCompilationError
 from coderca.tool_runtime import ToolRuntime, load_registered_test_command
 
 TASK_1_DIRECTORY = Path("benchmarks/django-waffle/task-1")
@@ -70,12 +73,12 @@ def registered_command(
     )
 
 
-def patch_decision(
+def candidate_patch(
     *,
     target_path: str = "src/module.py",
     unified_diff: str | None = None,
-) -> PatchDecision:
-    return PatchDecision(
+) -> CandidatePatch:
+    return CandidatePatch(
         hypothesis_id="H1",
         target_path=target_path,
         mechanism="Preserve explicit false values.",
@@ -91,7 +94,7 @@ def patch_decision(
 
 
 def execute_patch_validation(
-    runtime: ToolRuntime, patch: PatchDecision, artifact_directory: Path
+    runtime: ToolRuntime, patch: CandidatePatch, artifact_directory: Path
 ) -> tuple[ToolResult, PublicValidationResult]:
     validation_action = PatchValidationAction(
         validation_action_id="V1",
@@ -108,6 +111,107 @@ def execute_patch_validation(
         patch,
         artifact_directory=artifact_directory,
     )
+
+
+def test_runtime_compiles_patch_intent_without_modifying_faulty_workspace(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    source = workspace / "src" / "module.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = True\n")
+    runtime = ToolRuntime(
+        workspace,
+        manifest().model_copy(update={"write_paths": ["src/module.py"]}),
+        enforce_faulty_commit=False,
+    )
+    intent = PatchIntentDecision(
+        hypothesis_id="H1",
+        target_path="src/module.py",
+        mechanism="Preserve explicit false values.",
+        edits=(ExactReplacement(old_text="True", new_text="False"),),
+    )
+
+    candidate = runtime.compile_patch_intent(intent)
+
+    assert isinstance(candidate, CandidatePatch)
+    assert "-value = True" in candidate.unified_diff
+    assert "+value = False" in candidate.unified_diff
+    assert source.read_text() == "value = True\n"
+
+
+def test_runtime_compiles_patch_intent_against_crlf_source_without_normalizing(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    source = workspace / "src" / "module.py"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"value = True\r\n")
+    runtime = ToolRuntime(
+        workspace,
+        manifest().model_copy(update={"write_paths": ["src/module.py"]}),
+        enforce_faulty_commit=False,
+    )
+    intent = PatchIntentDecision(
+        hypothesis_id="H1",
+        target_path="src/module.py",
+        mechanism="Preserve explicit false values.",
+        edits=(ExactReplacement(old_text="True", new_text="False"),),
+    )
+
+    compiled = runtime.compile_patch_intent(intent)
+
+    assert "-value = True\r" in compiled.unified_diff
+    assert "+value = False\r" in compiled.unified_diff
+    assert source.read_bytes() == b"value = True\r\n"
+
+
+@pytest.mark.parametrize("target_path", ["tests/test_module.py", "../outside.py"])
+def test_runtime_rejects_patch_intent_outside_write_boundary(
+    tmp_path: Path,
+    target_path: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runtime = ToolRuntime(
+        workspace,
+        manifest().model_copy(update={"write_paths": [target_path]}),
+        enforce_faulty_commit=False,
+    )
+    intent = PatchIntentDecision(
+        hypothesis_id="H1",
+        target_path=target_path,
+        mechanism="Attempt a prohibited edit.",
+        edits=(ExactReplacement(old_text="old", new_text="new"),),
+    )
+
+    with pytest.raises(PatchIntentCompilationError) as captured:
+        runtime.compile_patch_intent(intent)
+
+    assert captured.value.validation_errors[0]["type"] == "permission_denied"
+
+
+def test_runtime_rejects_non_utf8_patch_target(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    source = workspace / "src" / "module.py"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"value = \xff\n")
+    runtime = ToolRuntime(
+        workspace,
+        manifest().model_copy(update={"write_paths": ["src/module.py"]}),
+        enforce_faulty_commit=False,
+    )
+    intent = PatchIntentDecision(
+        hypothesis_id="H1",
+        target_path="src/module.py",
+        mechanism="Replace invalid source.",
+        edits=(ExactReplacement(old_text="value", new_text="other"),),
+    )
+
+    with pytest.raises(PatchIntentCompilationError) as captured:
+        runtime.compile_patch_intent(intent)
+
+    assert captured.value.validation_errors[0]["type"] == "unsupported_encoding"
 
 
 def test_patch_validation_applies_once_in_temporary_workspace_and_records_checks(
@@ -148,7 +252,7 @@ def test_patch_validation_applies_once_in_temporary_workspace_and_records_checks
 
     tool_result, result = execute_patch_validation(
         runtime,
-        patch_decision(unified_diff=patch_decision().unified_diff.rstrip("\n")),
+        candidate_patch(unified_diff=candidate_patch().unified_diff.rstrip("\n")),
         tmp_path / "run",
     )
 
@@ -202,7 +306,7 @@ def test_patch_validation_rejects_prohibited_or_out_of_scope_paths(
 
     _, result = execute_patch_validation(
         runtime,
-        patch_decision(target_path=target_path, unified_diff=diff),
+        candidate_patch(target_path=target_path, unified_diff=diff),
         tmp_path / "run",
     )
 
@@ -236,7 +340,7 @@ def test_patch_validation_records_syntax_failure_without_running_second_patch(
 
     _, result = execute_patch_validation(
         runtime,
-        patch_decision(
+        candidate_patch(
             unified_diff=(
                 "--- a/src/module.py\n+++ b/src/module.py\n@@ -1 +1 @@\n"
                 "-value = True\n+value =\n"
@@ -277,7 +381,7 @@ def test_patch_validation_classifies_unavailable_docker_as_execution_failure(
     monkeypatch.setattr("coderca.tool_runtime.subprocess.run", run)
 
     _, result = execute_patch_validation(
-        runtime, patch_decision(), tmp_path / "run"
+        runtime, candidate_patch(), tmp_path / "run"
     )
 
     assert result.status == "failed"
@@ -320,7 +424,7 @@ def test_patch_validation_rejects_non_applicable_or_prohibited_diff_shapes(
 
     _, result = execute_patch_validation(
         runtime,
-        patch_decision(unified_diff=diff),
+        candidate_patch(unified_diff=diff),
         tmp_path / "run",
     )
 
@@ -344,7 +448,7 @@ def test_task_1_patch_passes_real_public_validation_when_image_is_available(
         manifest_value,
         registered_test_command=command,
     )
-    patch = PatchDecision(
+    patch = CandidatePatch(
         hypothesis_id="H1",
         target_path="waffle/models.py",
         mechanism="Restore the explicit None check for the everyone override.",
@@ -1129,6 +1233,13 @@ def test_runtime_projects_a_deterministic_safe_tool_catalog(tmp_path: Path) -> N
     assert catalog[0]["input_schema"]["type"] == "object"
     assert catalog[1]["permission"] == "read_only"
     assert catalog[1]["side_effects"] == "none"
+    assert all(item["observation_capabilities"] for item in catalog)
+    assert all(item["limitations"] for item in catalog)
+    assert any(
+        "source" in value.lower()
+        for value in catalog[1]["observation_capabilities"]
+    )
+    assert any("execute" in value.lower() for value in catalog[1]["limitations"])
     assert "handler" not in catalog[0]
 
 

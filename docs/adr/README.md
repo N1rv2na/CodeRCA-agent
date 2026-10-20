@@ -17,5 +17,8 @@
 | [0013](0013-local-schema-validation-structured-output-modes.md) | Accepted | 本地 Schema 校验与显式结构化输出模式 |
 | [0014](0014-single-active-hypothesis-reconstructed-context.md) | Accepted | 单 Active Hypothesis、受限 Reformulation 与按决策重建上下文 |
 | [0015](0015-lightweight-code-search.md) | Accepted | 使用受控 Lightweight Code Search，完整 Code RAG 延期 |
+| [0016](0016-final-location-and-independent-search-acceptance.md) | Accepted | 最终定位独立于暂定位置；直接 Evidence 或显式 Evidence Basis 可证明坐标 |
+| [0017](0017-executable-experiments-and-bounded-hypothesis-testing.md) | Accepted | 工具能力约束可执行 Experiment，并限制单 Hypothesis 最多三次诊断 Experiment |
+| [0018](0018-deterministic-patch-compilation.md) | Accepted | 模型提交结构化 Patch Intent，程序确定性编译 Candidate Patch |
 
 ADR 被接受后不直接改写历史结论。若决策改变，应新增 ADR 并标记被替代关系。

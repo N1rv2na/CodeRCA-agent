@@ -16,10 +16,28 @@ from coderca.contracts import (
     PatchValidationAction,
     ReformulateHypothesisDecision,
     SelectExperimentDecision,
+    TaskManifest,
     ToolResult,
     UpdateEvidenceDecision,
 )
 from coderca.diagnosis_state import DiagnosisStateMachine, InvalidDiagnosisTransition
+
+
+def test_global_tool_budget_accepts_ten_and_rejects_eleven(
+    valid_manifest_data: dict[str, object],
+) -> None:
+    manifest = TaskManifest.model_validate(
+        {**valid_manifest_data, "tool_call_limit": 10}
+    )
+    state = DiagnosisStateMachine(tool_call_limit=manifest.tool_call_limit)
+
+    assert state.remaining_tool_budget == 10
+    with pytest.raises(ValidationError):
+        TaskManifest.model_validate(
+            {**valid_manifest_data, "tool_call_limit": 11}
+        )
+    with pytest.raises(ValueError, match="between 1 and 10"):
+        DiagnosisStateMachine(tool_call_limit=11)
 
 
 def proposal(index: int) -> HypothesisProposal:
@@ -259,9 +277,7 @@ def test_supported_hypothesis_cannot_be_reformulated() -> None:
         state.begin_hypothesis_formation()
 
 
-@pytest.mark.parametrize(
-    "status", ["proposed", "testing", "rejected", "inconclusive"]
-)
+@pytest.mark.parametrize("status", ["proposed", "testing", "rejected", "inconclusive"])
 def test_only_supported_hypothesis_can_begin_validation(status: str) -> None:
     state = DiagnosisStateMachine()
     form_h1(state)
@@ -419,8 +435,7 @@ def test_falsified_assessment_without_contradicting_evidence_is_rejected() -> No
     assert state.active_hypothesis is not None
 
 
-def test_assessment_semantic_validation_is_non_mutating_and_reports_allowed_evidence(
-) -> None:
+def test_assessment_validation_preserves_state_and_reports_allowed_evidence() -> None:
     state = DiagnosisStateMachine()
     form_h1(state)
     register_evidence(state, direction="supporting")
@@ -442,8 +457,9 @@ def test_assessment_semantic_validation_is_non_mutating_and_reports_allowed_evid
     assert state.active_hypothesis.status == "proposed"
 
 
-def test_assessment_semantic_validation_rejects_incompatible_evidence_direction(
-) -> None:
+def test_assessment_semantic_validation_rejects_incompatible_evidence_direction() -> (
+    None
+):
     state = DiagnosisStateMachine()
     form_h1(state)
     register_evidence(state, direction="supporting")
@@ -463,6 +479,31 @@ def test_assessment_semantic_validation_rejects_incompatible_evidence_direction(
     assert state.active_hypothesis is not None
 
 
+def test_conflicting_direction_cannot_be_relabelled_by_assessment() -> None:
+    state = DiagnosisStateMachine()
+    form_h1(state)
+    original = register_evidence(state, direction="contradicting")
+    before = state.evidence
+    with pytest.raises(ValueError, match="Supporting Evidence"):
+        state.validate_hypothesis_assessment(
+            HypothesisAssessmentDecision(
+                outcome="sufficiently_supported",
+                evidence_refs=(original.evidence_id,),
+                rationale="I interpret the underlying observation as support.",
+            )
+        )
+    state.apply_hypothesis_assessment(
+        HypothesisAssessmentDecision(
+            outcome="continue_testing",
+            evidence_refs=(original.evidence_id,),
+            rationale="Direction and facts need a new discriminating Experiment.",
+        )
+    )
+    assert state.evidence == before
+    assert state.active_hypothesis is not None
+    assert state.active_hypothesis.status == "testing"
+
+
 def test_continue_testing_assessment_keeps_testing_hypothesis_active() -> None:
     state = DiagnosisStateMachine()
     form_h1(state)
@@ -479,6 +520,108 @@ def test_continue_testing_assessment_keeps_testing_hypothesis_active() -> None:
     assert state.active_hypothesis == first
     with pytest.raises(InvalidDiagnosisTransition, match="updating_evidence"):
         state.apply_hypothesis_assessment(assessment)
+
+
+def test_active_hypothesis_has_an_independent_three_experiment_budget() -> None:
+    state = DiagnosisStateMachine(tool_call_limit=8)
+    form_h1(state)
+
+    assert state.used_experiments_for_active_hypothesis == 0
+    assert state.remaining_experiment_budget == 3
+    assert state.experiment_budget_exhausted is False
+
+    for expected_used in (1, 2):
+        evidence = register_evidence(state, direction="inconclusive")
+        state.apply_hypothesis_assessment(
+            HypothesisAssessmentDecision(
+                outcome="continue_testing",
+                evidence_refs=(evidence.evidence_id,),
+                rationale="A feasible non-redundant Experiment remains.",
+            )
+        )
+        assert state.used_experiments_for_active_hypothesis == expected_used
+        assert state.remaining_experiment_budget == 3 - expected_used
+
+    register_evidence(state, direction="inconclusive")
+
+    assert state.used_experiments_for_active_hypothesis == 3
+    assert state.remaining_experiment_budget == 0
+    assert state.experiment_budget_exhausted is True
+
+
+def test_exhausted_hypothesis_experiment_budget_rejects_continue_testing() -> None:
+    state = DiagnosisStateMachine(tool_call_limit=8)
+    form_h1(state)
+    for _ in range(2):
+        evidence = register_evidence(state, direction="inconclusive")
+        state.apply_hypothesis_assessment(
+            HypothesisAssessmentDecision(
+                outcome="continue_testing",
+                evidence_refs=(evidence.evidence_id,),
+                rationale="A feasible non-redundant Experiment remains.",
+            )
+        )
+    evidence = register_evidence(state, direction="inconclusive")
+
+    decision = HypothesisAssessmentDecision(
+        outcome="continue_testing",
+        evidence_refs=(evidence.evidence_id,),
+        rationale="Try a fourth Experiment.",
+    )
+    with pytest.raises(ValueError, match="Experiment budget exhausted") as raised:
+        state.validate_hypothesis_assessment(decision)
+
+    errors = getattr(raised.value, "validation_errors")
+    assert errors[0]["loc"] == ["outcome"]
+    assert errors[0]["type"] == "hypothesis_experiment_budget_exhausted"
+    assert state.stage is DiagnosisStage.UPDATING_EVIDENCE
+
+
+def test_exhausted_hypothesis_experiment_budget_allows_inconclusive_end() -> None:
+    state = DiagnosisStateMachine(tool_call_limit=8)
+    form_h1(state)
+    for _ in range(2):
+        evidence = register_evidence(state, direction="inconclusive")
+        state.apply_hypothesis_assessment(
+            HypothesisAssessmentDecision(
+                outcome="continue_testing",
+                evidence_refs=(evidence.evidence_id,),
+                rationale="A feasible non-redundant Experiment remains.",
+            )
+        )
+    evidence = register_evidence(state, direction="inconclusive")
+
+    ended = state.apply_hypothesis_assessment(
+        HypothesisAssessmentDecision(
+            outcome="inconclusive",
+            evidence_refs=(evidence.evidence_id,),
+            rationale="No experiment budget remains for this Hypothesis.",
+        )
+    )
+
+    assert ended.status == "inconclusive"
+    assert state.active_hypothesis is None
+
+
+def test_fourth_experiment_is_rejected_even_if_stage_is_reentered() -> None:
+    state = DiagnosisStateMachine(tool_call_limit=8)
+    form_h1(state)
+    for _ in range(2):
+        evidence = register_evidence(state, direction="inconclusive")
+        state.apply_hypothesis_assessment(
+            HypothesisAssessmentDecision(
+                outcome="continue_testing",
+                evidence_refs=(evidence.evidence_id,),
+                rationale="A feasible non-redundant Experiment remains.",
+            )
+        )
+    register_evidence(state, direction="inconclusive")
+    state.transition_to(DiagnosisStage.DIAGNOSING)
+
+    with pytest.raises(InvalidDiagnosisTransition, match="Experiment budget exhausted"):
+        state.begin_experiment(
+            experiment("H1").model_copy(update={"experiment_id": "X4"})
+        )
 
 
 def successful_tool_result(
@@ -578,3 +721,61 @@ def test_tool_budget_stops_before_a_second_execution() -> None:
 
     with pytest.raises(InvalidDiagnosisTransition, match="Tool budget exhausted"):
         state.begin_experiment(current.model_copy(update={"experiment_id": "X2"}))
+
+
+def test_nine_diagnostic_experiments_leave_one_validation_tool_call() -> None:
+    state = DiagnosisStateMachine(tool_call_limit=10)
+    form_h1(state)
+
+    for hypothesis_index in (1, 2):
+        latest_evidence: Evidence | None = None
+        for experiment_index in range(3):
+            latest_evidence = register_evidence(state, direction="inconclusive")
+            if experiment_index < 2:
+                state.apply_hypothesis_assessment(
+                    HypothesisAssessmentDecision(
+                        outcome="continue_testing",
+                        evidence_refs=(latest_evidence.evidence_id,),
+                        rationale="A discriminating Experiment remains.",
+                    )
+                )
+        assert latest_evidence is not None
+        state.apply_hypothesis_assessment(
+            HypothesisAssessmentDecision(
+                outcome="inconclusive",
+                evidence_refs=(latest_evidence.evidence_id,),
+                rationale="The per-Hypothesis Experiment budget is exhausted.",
+            )
+        )
+        reformulate(
+            state,
+            hypothesis_index + 1,
+            evidence_refs=(latest_evidence.evidence_id,),
+        )
+
+    for experiment_index in range(3):
+        latest_evidence = register_evidence(
+            state,
+            direction="supporting" if experiment_index == 2 else "inconclusive",
+        )
+        if experiment_index < 2:
+            state.apply_hypothesis_assessment(
+                HypothesisAssessmentDecision(
+                    outcome="continue_testing",
+                    evidence_refs=(latest_evidence.evidence_id,),
+                    rationale="A discriminating Experiment remains.",
+                )
+            )
+    state.apply_hypothesis_assessment(
+        HypothesisAssessmentDecision(
+            outcome="sufficiently_supported",
+            evidence_refs=(latest_evidence.evidence_id,),
+            rationale="The registered Evidence supports H3.",
+        )
+    )
+
+    assert state.used_tool_calls == 9
+    assert state.remaining_tool_budget == 1
+    state.begin_validation(validation_action("H3"))
+    assert state.used_tool_calls == 10
+    assert state.tool_budget_exhausted

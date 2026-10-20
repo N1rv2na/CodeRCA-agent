@@ -10,6 +10,17 @@ from .contracts import Evidence, Experiment, Hypothesis, Observation, TaskManife
 from .diagnosis_state import DiagnosisStateMachine, InvalidDiagnosisTransition
 
 
+def _evidence_direction_contract() -> dict[str, str]:
+    return {
+        "reference": "active_hypothesis.mechanism",
+        "supporting": "Positive observed facts support the stated mechanism.",
+        "contradicting": "Observed facts oppose the stated mechanism.",
+        "inconclusive": "Insufficient, mixed, or ambiguous relation to the mechanism.",
+        "warning": "Not relative to falsification_criterion or expected_observation; "
+        "failure to falsify alone does not establish support.",
+    }
+
+
 @dataclass(frozen=True)
 class DiagnosisTaskContext:
     manifest: TaskManifest
@@ -61,6 +72,7 @@ class ContextBuilder:
         *,
         observations: list[Observation] | None = None,
         evidence: list[Evidence] | None = None,
+        available_tools: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         evidence = evidence or []
         observations = observations or []
@@ -84,6 +96,7 @@ class ContextBuilder:
                 "evidence": self._dump_evidence(evidence, ended_ids),
                 "observations": self._dump_observations(observations, ended_ids),
             }
+            context["available_tools"] = available_tools or []
         return context
 
     def build_select_experiment(
@@ -101,6 +114,9 @@ class ContextBuilder:
         relevant_ids = {active.hypothesis_id}
         return {
             "decision_type": "select_experiment",
+            "evidence_basis_knowledge": self._evidence_basis_knowledge(
+                active, evidence, observations
+            ),
             "available_tools": available_tools,
             "task_context": self._task_context(task),
             "diagnosis_state": self._diagnosis_state(
@@ -147,12 +163,14 @@ class ContextBuilder:
         relevant_ids = {active.hypothesis_id}
         return {
             "decision_type": "update_evidence",
+            "evidence_direction_contract": _evidence_direction_contract(),
             "active_hypothesis": active.model_dump(mode="json"),
             "current_experiment": experiment.model_dump(mode="json"),
             "latest_observation": observation_view,
-            "existing_relevant_evidence": self._dump_evidence(
-                evidence, relevant_ids
+            "evidence_basis_knowledge": self._evidence_basis_knowledge(
+                active, evidence, list(state.observations)
             ),
+            "existing_relevant_evidence": self._dump_evidence(evidence, relevant_ids),
         }
 
     def build_assess_hypothesis(
@@ -160,6 +178,7 @@ class ContextBuilder:
         task: DiagnosisTaskContext,
         state: DiagnosisStateMachine,
         *,
+        available_tools: list[dict[str, Any]],
         observations: list[Observation],
         evidence: list[Evidence],
         used_tool_calls: int,
@@ -168,14 +187,30 @@ class ContextBuilder:
         relevant_ids = {active.hypothesis_id}
         return {
             "decision_type": "assess_hypothesis",
+            "evidence_direction_contract": _evidence_direction_contract(),
+            "assessment_requirements": {
+                "sufficiently_supported": "supporting",
+                "falsified": "contradicting",
+                "rule": "At least one cited Evidence must have the required "
+                "registered direction; necessary but not sufficient. "
+                "Never relabel existing Evidence. If labels and facts "
+                "conflict, use continue_testing for a targeted new "
+                "Experiment, or inconclusive if no useful test remains.",
+            },
             "task_context": self._task_context(task),
+            "available_tools": available_tools,
             "diagnosis_state": self._diagnosis_state(
                 task, state, used_tool_calls=used_tool_calls
             ),
             "active_hypothesis": active.model_dump(mode="json"),
+            "evidence_basis_knowledge": self._evidence_basis_knowledge(
+                active, evidence, observations
+            ),
             "relevant_evidence": self._dump_evidence(evidence, relevant_ids),
-            "relevant_observations": self._dump_observations(
-                observations, relevant_ids
+            "relevant_observations": self._dump_observations_with_excerpt(
+                observations,
+                relevant_ids,
+                excerpt_limit=self.observation_excerpt_limit,
             ),
         }
 
@@ -197,6 +232,9 @@ class ContextBuilder:
             "decision_type": "validate_hypothesis",
             "task_context": self._task_context(task),
             "supported_hypothesis": supported.model_dump(mode="json"),
+            "evidence_basis_knowledge": self._evidence_basis_knowledge(
+                supported, evidence, observations
+            ),
             "relevant_evidence": self._dump_evidence(evidence, relevant_ids),
             "relevant_observations": self._dump_observations_with_excerpt(
                 observations,
@@ -250,6 +288,10 @@ class ContextBuilder:
             "remaining_tool_budget": max(
                 task.manifest.tool_call_limit - used_tool_calls, 0
             ),
+            "used_experiment_budget": (
+                state.used_experiments_for_active_hypothesis
+            ),
+            "remaining_experiment_budget": state.remaining_experiment_budget,
         }
 
     @staticmethod
@@ -270,6 +312,37 @@ class ContextBuilder:
             for item in evidence
             if item.hypothesis_id in hypothesis_ids
         ]
+
+    def _evidence_basis_knowledge(
+        self,
+        hypothesis: Hypothesis,
+        evidence: list[Evidence],
+        observations: list[Observation],
+    ) -> dict[str, list[dict[str, Any]]]:
+        evidence_by_id = {item.evidence_id: item for item in evidence}
+        selected_evidence = [
+            evidence_by_id[evidence_id]
+            for evidence_id in hypothesis.evidence_basis
+            if evidence_id in evidence_by_id
+        ]
+        observation_by_id = {
+            item.observation_id: item for item in observations
+        }
+        selected_observations = [
+            observation_by_id[item.observation_ref]
+            for item in selected_evidence
+            if item.observation_ref in observation_by_id
+        ]
+        return {
+            "evidence": [
+                item.model_dump(mode="json") for item in selected_evidence
+            ],
+            "observations": self._dump_observations_with_excerpt(
+                selected_observations,
+                {item.hypothesis_id for item in selected_evidence},
+                excerpt_limit=self.observation_excerpt_limit,
+            ),
+        }
 
     @staticmethod
     def _dump_observations(

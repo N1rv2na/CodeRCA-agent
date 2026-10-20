@@ -270,6 +270,18 @@ class OpenAICompatibleModelProvider:
         self.transport = transport if transport is not None else UrlLibHttpTransport()
         self.timeout_seconds = timeout_seconds
 
+    def sanitize_request_artifact(self, value: object) -> PersistenceSafeModelArtifact:
+        """Redact known credentials using the same policy as response artifacts."""
+        return PersistenceSafeModelArtifact(
+            _redact_value(
+                value,
+                _request_redaction_values(
+                    self._api_key.get_secret_value(),
+                    self.configuration.request_extensions,
+                ),
+            )
+        )
+
     def generate_structured(
         self,
         *,
@@ -448,6 +460,10 @@ class FakeModelProvider:
         }
         self.structured_calls: list[str] = []
         self.structured_requests: list[dict[str, str]] = []
+
+    def sanitize_request_artifact(self, value: object) -> PersistenceSafeModelArtifact:
+        """The deterministic provider has no endpoint credentials."""
+        return PersistenceSafeModelArtifact(value)
 
     def generate_structured(
         self,

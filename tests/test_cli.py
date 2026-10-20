@@ -175,38 +175,37 @@ def test_cli_workspace_runs_the_patch_validation_loop(
                 "evidence_refs": ["E1"],
                 "rationale": "The code Evidence is sufficient for read-only RCA.",
             },
-            "generate_patch": {
+            "generate_patch_intent": {
                 "hypothesis_id": "H1",
                 "target_path": "waffle/models.py",
                 "mechanism": "Restore the explicit None check.",
-                "unified_diff": (
-                    "--- a/waffle/models.py\n+++ b/waffle/models.py\n"
-                    "@@ -231,7 +231,7 @@ class AbstractBaseFlag(BaseModel):\n"
-                    " \n"
-                    "     def is_active_for_user(self, user: AbstractBaseUser) "
-                    "-> bool | None:\n"
-                    "         # According to the docs, everyone should override "
-                    "all the other settings\n"
-                    "-        if self.everyone:\n"
-                    "+        if self.everyone is not None:\n"
-                    "             return self.everyone\n"
-                    " \n"
-                    "         if self.authenticated and user.is_authenticated:\n"
-                ),
+                "edits": [
+                    {
+                        "old_text": (
+                            "        # According to the docs, everyone should "
+                            "override all the other settings\n"
+                            "        if self.everyone:"
+                        ),
+                        "new_text": (
+                            "        # According to the docs, everyone should "
+                            "override all the other settings\n"
+                            "        if self.everyone is not None:"
+                        ),
+                    }
+                ],
             },
             "generate_report": {
                 "trigger_condition": "The flag stores everyone=False.",
                 "propagation_path": "A truthiness guard falls through.",
                 "failure_manifestation": "The probe observes true instead of false.",
                 "repair_recommendation": "Restore explicit None checks.",
+                "location": None,
             },
         }
     )
     real_run = subprocess.run
 
-    def run(
-        command: list[str], **kwargs: Any
-    ) -> subprocess.CompletedProcess[str]:
+    def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         if command[0] == "git":
             return cast(subprocess.CompletedProcess[str], real_run(command, **kwargs))
         return subprocess.CompletedProcess(command, 0, stdout="VALIDATION_OK\n")

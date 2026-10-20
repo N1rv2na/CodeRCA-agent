@@ -85,3 +85,16 @@ class RunStore:
         path.write_text(
             json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8"
         )
+
+    def write_model_request(
+        self,
+        artifacts: RunArtifacts,
+        *,
+        name: str,
+        request: PersistenceSafeModelArtifact,
+    ) -> None:
+        if not name or Path(name).name != name or not name.endswith(".json"):
+            raise ValueError("request name must be a JSON file basename")
+        directory = artifacts.run_directory / "model-requests"
+        directory.mkdir(exist_ok=True)
+        self._write_json(directory / name, request.value)

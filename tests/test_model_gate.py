@@ -9,6 +9,8 @@ import pytest
 from pydantic import BaseModel
 
 from coderca import model_gate
+from coderca.contracts import HypothesisAssessmentDecision
+from coderca.decision_prompts import HYPOTHESIS_ASSESSMENT_SYSTEM_PROMPT
 from coderca.model_provider import (
     FakeModelProvider,
     ModelConfiguration,
@@ -63,7 +65,8 @@ def test_successful_gate_runs_the_same_probes_and_records_mode(
         "stage_schema",
         "tool_arguments",
         "evidence_update",
-        "python_patch",
+        "hypothesis_assessment",
+        "python_patch_intent",
     ]
     assert report.compatible is True
     assert report.schema_version == "2"
@@ -80,8 +83,8 @@ def test_successful_gate_runs_the_same_probes_and_records_mode(
         "strict": True if mode == "native_json_schema" else None,
     }
     assert report.request_configuration.model_dump() == expected_request_configuration
-    assert [probe.status for probe in report.probes] == ["passed"] * 5
-    assert len({probe.name for probe in report.probes}) == 5
+    assert [probe.status for probe in report.probes] == ["passed"] * 6
+    assert len({probe.name for probe in report.probes}) == 6
     assert all(probe.original_response_artifact for probe in report.probes)
 
     report_path = tmp_path / "gate" / "model-gate.json"
@@ -95,6 +98,70 @@ def test_successful_gate_runs_the_same_probes_and_records_mode(
         artifact_path = tmp_path / "gate" / str(probe.original_response_artifact)
         assert artifact_path.is_file()
         assert "secret-key" not in artifact_path.read_text()
+
+
+def test_gate_uses_the_real_assessment_contract_and_shared_exact_prompt(
+    tmp_path: Path,
+    valid_model_gate_responses: dict[str, dict[str, object]],
+) -> None:
+    class InspectingProvider(FakeModelProvider):
+        assessment_contract_seen = False
+
+        def generate_structured(
+            self,
+            *,
+            schema_name: str,
+            system_prompt: str,
+            user_prompt: str,
+            response_model: type[GateResponse],
+        ) -> StructuredModelResponse[GateResponse]:
+            if schema_name == "hypothesis_assessment":
+                assert response_model is HypothesisAssessmentDecision
+                assert system_prompt == HYPOTHESIS_ASSESSMENT_SYSTEM_PROMPT
+                self.assessment_contract_seen = True
+            return super().generate_structured(
+                schema_name=schema_name,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+            )
+
+    provider = InspectingProvider(valid_model_gate_responses)
+
+    report = model_gate.run_model_compatibility_gate(
+        provider=provider,
+        configuration=model_configuration("json_text"),
+        output_directory=tmp_path / "gate",
+    )
+
+    assert report.compatible is True
+    assert provider.assessment_contract_seen is True
+
+
+def test_gate_rejects_extra_assessment_fields_before_patch_probe(
+    tmp_path: Path,
+    valid_model_gate_responses: dict[str, dict[str, object]],
+) -> None:
+    valid_model_gate_responses["hypothesis_assessment"]["rationale_note"] = None
+    provider = FakeModelProvider(valid_model_gate_responses)
+
+    report = model_gate.run_model_compatibility_gate(
+        provider=provider,
+        configuration=model_configuration("json_text"),
+        output_directory=tmp_path / "gate",
+    )
+
+    assert provider.structured_calls == [
+        "preflight",
+        "stage_schema",
+        "tool_arguments",
+        "evidence_update",
+        "hypothesis_assessment",
+    ]
+    assert report.compatible is False
+    assert report.failure_category == "schema_mismatch"
+    assert report.probes[-1].name == "hypothesis_assessment"
+    assert report.probes[-1].status == "failed"
 
 
 def test_gate_report_does_not_persist_request_extension_values(
@@ -183,18 +250,14 @@ def test_gate_stops_after_a_provider_failure_in_both_modes(
     assert not (tmp_path / ".coderca-runs").exists()
 
 
-def test_gate_rejects_a_patch_that_does_not_apply_to_the_probe_fixture(
+def test_gate_rejects_a_patch_intent_that_does_not_match_the_probe_fixture(
     tmp_path: Path,
     valid_model_gate_responses: dict[str, dict[str, object]],
 ) -> None:
     responses = valid_model_gate_responses
-    responses["python_patch"]["unified_diff"] = (
-        "--- a/sample.py\n"
-        "+++ b/sample.py\n"
-        "@@ -1,1 +1,1 @@\n"
-        "-not the source line\n"
-        "+still not applicable\n"
-    )
+    responses["python_patch_intent"]["edits"] = [
+        {"old_text": "not the source line", "new_text": "still not applicable"}
+    ]
     provider = FakeModelProvider(responses)
 
     report = model_gate.run_model_compatibility_gate(
@@ -203,28 +266,26 @@ def test_gate_rejects_a_patch_that_does_not_apply_to_the_probe_fixture(
         output_directory=tmp_path / "gate",
     )
 
-    assert len(provider.structured_calls) == 5
+    assert len(provider.structured_calls) == 6
     assert report.compatible is False
     assert report.failure_category == "patch_not_applicable"
     assert report.probes[-1].status == "failed"
     assert report.probes[-1].original_response_artifact == (
-        "responses/python_patch.json"
+        "responses/python_patch_intent.json"
     )
 
 
-def test_gate_accepts_an_applicable_syntax_valid_equivalent_patch(
+def test_gate_accepts_an_applicable_behaviorally_equivalent_patch_intent(
     tmp_path: Path,
     valid_model_gate_responses: dict[str, dict[str, object]],
 ) -> None:
     responses = valid_model_gate_responses
-    responses["python_patch"]["unified_diff"] = (
-        "--- a/sample.py\n"
-        "+++ b/sample.py\n"
-        "@@ -1,2 +1,2 @@\n"
-        " def select_timeout(configured: int | None, default: int) -> int:\n"
-        "-    return configured or default\n"
-        "+    return default if configured is None else configured\n"
-    )
+    responses["python_patch_intent"]["edits"] = [
+        {
+            "old_text": "return configured or default",
+            "new_text": "return default if configured is None else configured",
+        }
+    ]
     provider = FakeModelProvider(responses)
 
     report = model_gate.run_model_compatibility_gate(
@@ -237,21 +298,49 @@ def test_gate_accepts_an_applicable_syntax_valid_equivalent_patch(
     assert report.failure_category is None
 
 
-def test_gate_accepts_a_correct_patch_with_sequential_control_flow(
+def test_gate_accepts_canonical_hunk_with_omitted_single_line_count(
     tmp_path: Path,
     valid_model_gate_responses: dict[str, dict[str, object]],
 ) -> None:
     responses = valid_model_gate_responses
-    responses["python_patch"]["unified_diff"] = (
-        "--- a/sample.py\n"
-        "+++ b/sample.py\n"
-        "@@ -1,2 +1,4 @@\n"
-        " def select_timeout(configured: int | None, default: int) -> int:\n"
-        "-    return configured or default\n"
-        "+    if configured is None:\n"
-        "+        return default\n"
-        "+    return configured\n"
+    responses["python_patch_intent"]["edits"] = [
+        {
+            "old_text": (
+                "def select_timeout(configured: int | None, default: int) -> int:\n"
+                "    return configured or default"
+            ),
+            "new_text": (
+                "def select_timeout(configured: int | None, default: int) -> int: "
+                "return configured if configured is not None else default"
+            ),
+        }
+    ]
+
+    report = model_gate.run_model_compatibility_gate(
+        provider=FakeModelProvider(responses),
+        configuration=model_configuration(),
+        output_directory=tmp_path / "gate",
     )
+
+    assert report.compatible is True
+    assert report.failure_category is None
+
+
+def test_gate_accepts_a_correct_patch_intent_with_sequential_control_flow(
+    tmp_path: Path,
+    valid_model_gate_responses: dict[str, dict[str, object]],
+) -> None:
+    responses = valid_model_gate_responses
+    responses["python_patch_intent"]["edits"] = [
+        {
+            "old_text": "    return configured or default",
+            "new_text": (
+                "    if configured is None:\n"
+                "        return default\n"
+                "    return configured"
+            ),
+        }
+    ]
 
     report = model_gate.run_model_compatibility_gate(
         provider=FakeModelProvider(responses),
@@ -262,19 +351,14 @@ def test_gate_accepts_a_correct_patch_with_sequential_control_flow(
     assert report.compatible is True
 
 
-def test_gate_rejects_an_applicable_patch_that_breaks_required_behavior(
+def test_gate_rejects_an_applicable_patch_intent_that_breaks_required_behavior(
     tmp_path: Path,
     valid_model_gate_responses: dict[str, dict[str, object]],
 ) -> None:
     responses = valid_model_gate_responses
-    responses["python_patch"]["unified_diff"] = (
-        "--- a/sample.py\n"
-        "+++ b/sample.py\n"
-        "@@ -1,2 +1,2 @@\n"
-        " def select_timeout(configured: int | None, default: int) -> int:\n"
-        "-    return configured or default\n"
-        "+    return default\n"
-    )
+    responses["python_patch_intent"]["edits"] = [
+        {"old_text": "return configured or default", "new_text": "return default"}
+    ]
 
     report = model_gate.run_model_compatibility_gate(
         provider=FakeModelProvider(responses),

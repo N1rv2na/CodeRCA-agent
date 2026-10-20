@@ -25,9 +25,10 @@ from pydantic import (
 )
 
 from .contracts import (
+    CandidatePatch,
     DecisionValidationError,
     Experiment,
-    PatchDecision,
+    PatchIntentDecision,
     PatchValidationAction,
     PublicValidationResult,
     RegisteredTestCommand,
@@ -36,6 +37,7 @@ from .contracts import (
     ToolResult,
     ValidationCheckResult,
 )
+from .patch_compiler import PatchIntentCompilationError, compile_candidate_patch
 
 _MAX_READ_LINES = 200
 _DEFAULT_RESULT_LIMIT = 12_000
@@ -75,9 +77,7 @@ def load_registered_test_command(
             "registered test command does not satisfy its contract"
         ) from exc
     if command.command_id != expected_command_id:
-        raise ValueError(
-            "registered test command ID does not match the Task Manifest"
-        )
+        raise ValueError("registered test command ID does not match the Task Manifest")
     return command
 
 
@@ -177,6 +177,8 @@ class ToolSpec:
     name: str
     version: str
     description: str
+    observation_capabilities: tuple[str, ...]
+    limitations: tuple[str, ...]
     input_model: type[BaseModel]
     output_model: type[BaseModel]
     permission: Literal["read_only", "code_execution"]
@@ -227,6 +229,13 @@ class ToolRuntime:
                 name="inspect_diff",
                 version="1",
                 description="Inspect the base-to-faulty Git diff.",
+                observation_capabilities=(
+                    "Return the bounded Base-to-Faulty-Commit source diff.",
+                ),
+                limitations=(
+                    "Does not expose runtime values or unchanged source behavior.",
+                    "Does not modify or execute repository code.",
+                ),
                 input_model=InspectDiffArguments,
                 output_model=ToolResult,
                 permission="read_only",
@@ -245,6 +254,13 @@ class ToolRuntime:
                 name="read_code",
                 version="1",
                 description="Read a bounded line range from repository source.",
+                observation_capabilities=(
+                    "Return bounded source lines from one repository-relative file.",
+                ),
+                limitations=(
+                    "Does not execute code or expose runtime values.",
+                    "Does not follow calls outside the requested line range.",
+                ),
                 input_model=ReadCodeArguments,
                 output_model=ToolResult,
                 permission="read_only",
@@ -267,6 +283,13 @@ class ToolRuntime:
                     "matching. Results discover locations; they do not assert "
                     "a Root Symbol or Evidence direction."
                 ),
+                observation_capabilities=(
+                    "Return bounded literal content or path matches with snippets.",
+                ),
+                limitations=(
+                    "Does not prove semantic behavior or global absence.",
+                    "Does not execute or modify repository code.",
+                ),
                 input_model=SearchCodeInput,
                 output_model=SearchCodeResult,
                 permission="read_only",
@@ -287,6 +310,13 @@ class ToolRuntime:
                 description=(
                     "Apply one candidate patch in the isolated Public Validation "
                     "workspace."
+                ),
+                observation_capabilities=(
+                    "Apply one candidate repair and return Public Validation results.",
+                ),
+                limitations=(
+                    "Available only after a Hypothesis is supported.",
+                    "Cannot instrument or explore during diagnosis.",
                 ),
                 input_model=ApplyPatchArguments,
                 output_model=PublicValidationResult,
@@ -311,6 +341,13 @@ class ToolRuntime:
                     "Run the Task Manifest's registered test command in the "
                     "minimal Docker execution boundary."
                 ),
+                observation_capabilities=(
+                    "Return exit status and bounded output from the registered test.",
+                ),
+                limitations=(
+                    "Cannot run arbitrary commands, selectors, or instrumentation.",
+                    "Does not modify the Faulty Commit workspace.",
+                ),
                 input_model=RunTestsArguments,
                 output_model=ToolResult,
                 permission="code_execution",
@@ -333,6 +370,8 @@ class ToolRuntime:
             {
                 "name": spec.name,
                 "description": spec.description,
+                "observation_capabilities": list(spec.observation_capabilities),
+                "limitations": list(spec.limitations),
                 "input_schema": spec.input_schema,
                 "permission": spec.permission,
                 "side_effects": spec.side_effects,
@@ -349,7 +388,7 @@ class ToolRuntime:
     def execute_patch_validation(
         self,
         action: PatchValidationAction,
-        patch: PatchDecision,
+        patch: CandidatePatch,
         *,
         artifact_directory: Path,
     ) -> tuple[ToolResult, PublicValidationResult]:
@@ -359,9 +398,7 @@ class ToolRuntime:
             action.hypothesis_id != patch.hypothesis_id
             or action.tool_name != "apply_patch"
         ):
-            raise ValueError(
-                "Patch Validation Action must bind the candidate patch"
-            )
+            raise ValueError("Patch Validation Action must bind the candidate patch")
 
         started = monotonic()
         self._call_count += 1
@@ -387,9 +424,7 @@ class ToolRuntime:
         try:
             spec = self.tool_specs["apply_patch"]
             try:
-                validated_arguments = spec.input_model.model_validate(
-                    action.arguments
-                )
+                validated_arguments = spec.input_model.model_validate(action.arguments)
                 arguments = ApplyPatchArguments.model_validate(
                     validated_arguments.model_dump()
                 )
@@ -489,8 +524,8 @@ class ToolRuntime:
                 for item in (static_check, registered_test)
                 if item is not None and not item.passed
             ]
-            failure_message = (
-                "Public Validation checks failed: " + ", ".join(failed_checks)
+            failure_message = "Public Validation checks failed: " + ", ".join(
+                failed_checks
             )
         result = PublicValidationResult(
             hypothesis_id=patch.hypothesis_id,
@@ -503,8 +538,7 @@ class ToolRuntime:
             failure_message=failure_message,
         )
         validation_path.write_text(
-            json.dumps(result.model_dump(mode="json"), sort_keys=True, indent=2)
-            + "\n",
+            json.dumps(result.model_dump(mode="json"), sort_keys=True, indent=2) + "\n",
             encoding="utf-8",
         )
         output = json.dumps(result.model_dump(mode="json"), sort_keys=True)
@@ -524,9 +558,7 @@ class ToolRuntime:
         )
         return tool_result, result
 
-    def validate_selection(
-        self, tool_name: str, arguments: dict[str, object]
-    ) -> None:
+    def validate_selection(self, tool_name: str, arguments: dict[str, object]) -> None:
         """Validate a model-selected call before state or budget mutation."""
 
         spec = self.tool_specs.get(tool_name)
@@ -576,6 +608,64 @@ class ToolRuntime:
                         }
                     ],
                 )
+
+    def compile_patch_intent(
+        self, intent: PatchIntentDecision
+    ) -> CandidatePatch:
+        """Compile one authorized exact-edit intent without mutating the workspace."""
+
+        try:
+            target_path = self._authorized_write_path(intent.target_path)
+            source_path = self._resolve_patch_source(target_path)
+            try:
+                source_text = source_path.read_bytes().decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise PatchIntentCompilationError(
+                    [
+                        {
+                            "loc": ["target_path"],
+                            "type": "unsupported_encoding",
+                            "msg": "Patch Compiler only supports UTF-8 text files",
+                            "input": target_path,
+                        }
+                    ]
+                ) from exc
+            candidate = compile_candidate_patch(source_text, intent)
+            self._validate_single_file_patch(candidate.unified_diff, target_path)
+            with tempfile.TemporaryDirectory(
+                prefix="coderca-patch-compile-"
+            ) as directory:
+                execution_workspace = Path(directory) / "workspace"
+                self._materialize_execution_workspace(execution_workspace)
+                self._apply_unified_diff(
+                    execution_workspace,
+                    candidate.unified_diff,
+                )
+            return candidate
+        except PatchIntentCompilationError:
+            raise
+        except _ToolFailure as exc:
+            raise PatchIntentCompilationError(
+                [
+                    {
+                        "loc": ["target_path"],
+                        "type": exc.category,
+                        "msg": str(exc),
+                        "input": intent.target_path,
+                    }
+                ]
+            ) from exc
+        except OSError as exc:
+            raise PatchIntentCompilationError(
+                [
+                    {
+                        "loc": ["target_path"],
+                        "type": "unreadable_source",
+                        "msg": "Patch target is not a readable UTF-8 source file",
+                        "input": intent.target_path,
+                    }
+                ]
+            ) from exc
 
     def _verify_faulty_commit(self) -> None:
         try:
@@ -698,6 +788,28 @@ class ToolRuntime:
             raise _ToolFailure("execution_failed", "git diff execution failed")
         return result.stdout
 
+    def validate_location_range(self, path: str, start: int, end: int) -> None:
+        """Check a claim against the unchanged workspace without a Tool call."""
+        try:
+            source = self._safe_search_file(path)
+            if self._enforce_faulty_commit:
+                files = self._tracked_searchable_files([path], deadline=monotonic() + 5)
+                if path not in files:
+                    raise ValueError("location is not tracked at the Faulty Commit")
+            if not 1 <= start <= end <= len(source.read_text().splitlines()):
+                raise ValueError("location exceeds Faulty Commit file bounds")
+        except (OSError, ValueError, _ToolFailure, subprocess.SubprocessError) as exc:
+            raise DecisionValidationError(
+                "invalid final location",
+                [
+                    {
+                        "loc": ["location"],
+                        "type": "invalid_location_range",
+                        "msg": str(exc),
+                    }
+                ],
+            ) from exc
+
     def _read_code(self, raw: BaseModel, timeout_seconds: float) -> str:
         arguments = ReadCodeArguments.model_validate(raw.model_dump())
         relative_path = self._authorized_relative_path(arguments.path)
@@ -752,9 +864,7 @@ class ToolRuntime:
                 max(deadline - monotonic(), 0.001),
             )
         else:
-            matches, truncated = self._search_paths(
-                arguments, files, deadline=deadline
-            )
+            matches, truncated = self._search_paths(arguments, files, deadline=deadline)
         self._check_search_deadline(deadline)
         result = SearchCodeResult(
             query=arguments.query,
@@ -901,8 +1011,7 @@ class ToolRuntime:
         end_line = min(line_number + context_lines, max(len(lines), 1))
         selected = lines[start_line - 1 : end_line]
         snippet = "".join(
-            f"{number}: {line}\n"
-            for number, line in enumerate(selected, start_line)
+            f"{number}: {line}\n" for number, line in enumerate(selected, start_line)
         )
         bounded = snippet[:_MAX_SEARCH_SNIPPET_LENGTH]
         return SearchMatch(
@@ -943,9 +1052,7 @@ class ToolRuntime:
             scopes.append(normalized)
         return scopes
 
-    def _searchable_files(
-        self, scopes: list[str], *, deadline: float
-    ) -> list[str]:
+    def _searchable_files(self, scopes: list[str], *, deadline: float) -> list[str]:
         if self._enforce_faulty_commit:
             return self._tracked_searchable_files(scopes, deadline=deadline)
         files: set[str] = set()
@@ -1111,10 +1218,7 @@ class ToolRuntime:
                 "--workdir",
                 "/workspace",
                 "--mount",
-                (
-                    f"type=bind,src={execution_workspace},"
-                    "dst=/workspace"
-                ),
+                (f"type=bind,src={execution_workspace},dst=/workspace"),
                 self.manifest.docker_image,
                 *command.argv,
             ]
@@ -1188,8 +1292,7 @@ class ToolRuntime:
             marker in output for marker in command.test_failure_output_markers
         )
         return completed.returncode == 0 or (
-            completed.returncode in command.test_failure_exit_codes
-            and marker_matches
+            completed.returncode in command.test_failure_exit_codes and marker_matches
         )
 
     def _run_validation_container(
@@ -1226,15 +1329,11 @@ class ToolRuntime:
                 timeout=timeout_seconds,
             )
         except OSError as exc:
-            raise _ToolFailure(
-                "execution_failed", f"{label} could not start"
-            ) from exc
+            raise _ToolFailure("execution_failed", f"{label} could not start") from exc
         except subprocess.TimeoutExpired as exc:
             cleanup_error = self._force_remove_container(container_name)
             if cleanup_error is None:
-                raise _ToolFailure(
-                    "timeout", f"{label} exceeded its timeout"
-                ) from exc
+                raise _ToolFailure("timeout", f"{label} exceeded its timeout") from exc
             raise _ToolFailure(
                 "execution_failed",
                 f"{label} timed out and container cleanup failed: {cleanup_error}",
@@ -1325,6 +1424,27 @@ class ToolRuntime:
                 "permission_denied", "patch path is outside Manifest write_paths"
             )
         return normalized
+
+    def _resolve_patch_source(self, relative_path: str) -> Path:
+        current = self.workspace_root
+        for part in Path(relative_path).parts:
+            current /= part
+            if current.is_symlink():
+                raise _ToolFailure(
+                    "permission_denied", "symbolic links are not writable"
+                )
+        resolved = current.resolve()
+        try:
+            resolved.relative_to(self.workspace_root)
+        except ValueError as exc:
+            raise _ToolFailure(
+                "permission_denied", "patch path escapes the repository workspace"
+            ) from exc
+        if not resolved.is_file():
+            raise _ToolFailure(
+                "permission_denied", "patch path is not a writable repository file"
+            )
+        return resolved
 
     @staticmethod
     def _validate_single_file_patch(unified_diff: str, target_path: str) -> None:

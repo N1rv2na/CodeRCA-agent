@@ -16,6 +16,8 @@ CodeRCA 保留小型显式状态机和受约束 ReAct，但一次 Diagnosis Run 
 
 每次 Model Decision 都从 Diagnosis Task 与结构化 Diagnosis State 重建 decision-specific Working Context。形成 H1、选择 Experiment、更新 Evidence、评估 Hypothesis、Reformulate 和 Validation 使用不同的确定性 Context View，只选择相关 Evidence、Observation 摘要和必要的 bounded raw excerpt。完整 Model Response、Tool Result、代码、日志和测试输出保存在 Run Artifact 中，不作为 Agent State，也不默认重放给模型。
 
+实现澄清（2026-10-20）：H2/H3 的 `evidence_basis` 不只是 ID 审计字段。Select Experiment、Update Evidence、Assess Hypothesis 和 Validation 都必须把这些 ID 解析为历史 Evidence 及其有界 Observation，作为独立的 Evidence Basis Knowledge 投影。它不得与当前 Hypothesis 的 relevant Evidence 合并；历史 Evidence 的 Direction 仍相对其原 Hypothesis，不能直接驱动当前 Hypothesis 的 lifecycle transition。
+
 ## 备选方案
 
 - 保留多个初始候选与固定分数：实现候选比较直观，但继续承担过早冻结搜索空间和虚假精确性的缺陷。

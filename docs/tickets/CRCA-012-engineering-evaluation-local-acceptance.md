@@ -19,7 +19,7 @@ M4 — Evaluation & Delivery
 ## Scope
 
 - 建立调用 Diagnosis Application Service 的 Evaluation Harness。
-- 实现确定性的 Outcome Evaluation：最终 supported Hypothesis 的 Root Symbol、补丁可应用性、Validation 和报告合同。
+- 实现确定性的 Outcome Evaluation：最终报告 location 的路径/规范符号/缺陷行范围、程序生成的 Candidate Patch 可应用性、Validation 和报告合同；不得以 Hypothesis 暂定符号替代。搜索展示独立验收，不作为默认诊断成功前提（ADR-0016）。
 - 实现确定性的 Trajectory Evaluation：single-active、append-only History、Experiment 目的/预期/falsification relevance、Evidence 引用、reject-before-reformulate、H1～H3 Budget、停止原因和 supported-H patch 规则。
 - 输出逐任务结果，不汇总带泛化暗示的成功率。
 - 提供触发条件、缺陷位置、传播路径和失败表现的人工核查表。
@@ -50,7 +50,7 @@ Evaluation Harness 作为应用服务适配器读取 Ground Truth 和 Diagnosis 
 ## Acceptance Criteria
 
 - [ ] CLI 与 Evaluation Harness 调用同一个 Diagnosis Application Service。
-- [ ] Outcome Evaluation 分别报告最终 Root Symbol、补丁可应用性、Validation 和报告合同结果。
+- [ ] Outcome Evaluation 分别报告最终 Root Symbol、Patch Intent 编译结果、Candidate Patch 可应用性、Validation 和报告合同结果。
 - [ ] Trajectory Evaluation 能检测并行 Active H、History 覆盖/复活/H4、未绑定 Experiment、缺少 falsification relevance、无 Observation 来源的 Evidence、未结束当前 H 就 Reformulate、预算越界、非法停止和非 supported-H patch。
 - [ ] 合法与故意违规的 Evaluation fixture 均产生预期确定性结果。
 - [ ] 输出按 Task 1、Task 2，以及完整目标中的 Task 3 逐项列出，不计算成功率。
@@ -62,7 +62,7 @@ Evaluation Harness 作为应用服务适配器读取 Ground Truth 和 Diagnosis 
 
 ## Testing Strategy
 
-- 用命中、未命中、补丁失败、Validation 失败和报告缺字段 fixture 测试 Outcome Evaluation。
+- 用命中、未命中、Patch Intent 编译失败、Candidate Patch 失败、Validation 失败和报告缺字段 fixture 测试 Outcome Evaluation。
 - 用合法和逐项违反 single-active、append-only、reject-before-reformulate、Evidence provenance 与 Budget 不变量的 JSONL 轨迹测试 Trajectory Evaluation。
 - 对 Harness 运行 FakeModelProvider 端到端测试，验证它没有绕过应用服务。
 - 在干净本地检出环境按文档执行一次 smoke acceptance。
@@ -104,6 +104,7 @@ CRCA-011 仅影响 Task 3 的实际验收集合，不阻塞 Evaluation Harness �
 
 ## Related ADRs
 
+- ADR-0016 — 最终定位与搜索能力独立验收
 - ADR-0014 — 单 Active Hypothesis 与按决策重建上下文
 - ADR-0002 — 使用结构化工具运行时且不实现 MCP
 - ADR-0015 — CodeRCA MVP 使用 Lightweight Code Search

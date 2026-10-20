@@ -16,4 +16,10 @@
 - CRCA-003：通用 OpenAI-compatible ModelProvider、两种 Structured Output Mode、受控 Request Extensions 与 Model Compatibility Gate。
 - CRCA-004：单个初始 H1、append-only H1～H3 History 与 single-active 不变量、五类 decision-specific Context View、一次 Schema 纠错、Schema Failure 终止，以及显式选择 OpenAI-compatible Provider 的真实模型形成入口。
 
-完整诊断工具循环、Tool Runtime、Lightweight Code Search、Docker Validation 和 Evaluation Harness 仍属于后续 Ticket，不能从当前代码状态推断为已经实现。ContextBuilder 的确定性 Context View 已经实现并有单元测试，不属于这些待开发项。
+- CRCA-005～008：Evidence/Assessment/Reformulation 循环、Tool Runtime、Docker 测试与单次补丁 Validation、Lightweight Code Search。
+- CRCA-010：冻结 Task 2 与专用验收器已存在；真实模型 Run `7c40fa56-d099-4578-ba16-90aea2940516` 使用 7/10 Tool Budget，Reformulate H2 后定位 `waffle/utils.py::keyfmt` 的大小写折叠，生成正确补丁并通过 Public Validation。最终位置同时引用 H1 Evidence Basis 与 H2 直接代码 Evidence；专用验收器报告 `location=hit`、`repair_validation=passed`、`search_capability=verified`、`outcome_pass=true`，仍需人工因果审核。
+- [ADR-0016](adr/0016-final-location-and-independent-search-acceptance.md)：最终报告定位独立于初始 Hypothesis 猜测；supported H 的直接 Evidence 或显式 Evidence Basis 可证明坐标，但不自动证明符号或因果；Outcome 与搜索展示分离。
+- [ADR-0017](adr/0017-executable-experiments-and-bounded-hypothesis-testing.md)：工具能力约束可执行 Experiment，并将每个 Active Hypothesis 的诊断 Experiment 限制为三次。
+- [ADR-0018](adr/0018-deterministic-patch-compilation.md)：模型提交结构化 Patch Intent，程序确定性编译唯一 Candidate Patch，再进入 Public Validation。
+
+通用 Evaluation Harness 尚待实现。ContextBuilder 的确定性 Context View 已实现并有单元测试；Patch Intent 编译不重构 ContextBuilder。Task 2 数据保持冻结；专用自动验收已经通过，但仍不得把单任务 Outcome 或搜索能力通过表述为通用诊断能力，且因果结论仍需人工审核。

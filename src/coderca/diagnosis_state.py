@@ -21,6 +21,7 @@ from .contracts import (
 )
 
 _MAX_HYPOTHESES = 3
+_MAX_EXPERIMENTS_PER_HYPOTHESIS = 3
 _ACTIVE_STATUSES = frozenset({"proposed", "testing"})
 _REFORMULATABLE_STATUSES = frozenset({"rejected", "inconclusive"})
 
@@ -72,10 +73,10 @@ class DiagnosisStateMachine:
         self,
         stage: DiagnosisStage = DiagnosisStage.PREPARING,
         *,
-        tool_call_limit: int = 8,
+        tool_call_limit: int = 10,
     ) -> None:
-        if not 1 <= tool_call_limit <= 8:
-            raise ValueError("tool_call_limit must be between 1 and 8")
+        if not 1 <= tool_call_limit <= 10:
+            raise ValueError("tool_call_limit must be between 1 and 10")
         self._stage = stage
         self._hypothesis_history: tuple[Hypothesis, ...] = ()
         self._schema_corrections_used = 0
@@ -134,6 +135,27 @@ class DiagnosisStateMachine:
     @property
     def tool_budget_exhausted(self) -> bool:
         return self.remaining_tool_budget == 0
+
+    @property
+    def used_experiments_for_active_hypothesis(self) -> int:
+        active = self.active_hypothesis
+        if active is None:
+            return 0
+        return sum(
+            item.hypothesis_id == active.hypothesis_id for item in self._experiments
+        )
+
+    @property
+    def remaining_experiment_budget(self) -> int:
+        return max(
+            _MAX_EXPERIMENTS_PER_HYPOTHESIS
+            - self.used_experiments_for_active_hypothesis,
+            0,
+        )
+
+    @property
+    def experiment_budget_exhausted(self) -> bool:
+        return self.remaining_experiment_budget == 0
 
     @property
     def current_experiment(self) -> Experiment | None:
@@ -403,6 +425,10 @@ class DiagnosisStateMachine:
             raise InvalidDiagnosisTransition(
                 f"Experiment must bind the Active Hypothesis {active.hypothesis_id}"
             )
+        if self.experiment_budget_exhausted:
+            raise InvalidDiagnosisTransition(
+                f"Experiment budget exhausted for {active.hypothesis_id}"
+            )
 
     def begin_experiment(self, experiment: Experiment) -> None:
         """Authorize exactly one Experiment and consume one Tool Budget unit."""
@@ -591,6 +617,25 @@ class DiagnosisStateMachine:
         if errors:
             raise DecisionValidationError(
                 "Hypothesis assessment references unknown Evidence", errors
+            )
+
+        if (
+            decision.outcome == "continue_testing"
+            and self.experiment_budget_exhausted
+        ):
+            raise DecisionValidationError(
+                "Experiment budget exhausted for the Active Hypothesis",
+                [
+                    {
+                        "loc": ["outcome"],
+                        "type": "hypothesis_experiment_budget_exhausted",
+                        "msg": (
+                            "continue_testing is forbidden after three Experiments; "
+                            "choose a terminal Hypothesis assessment"
+                        ),
+                        "input": decision.outcome,
+                    }
+                ],
             )
 
         expected_direction: str | None = None

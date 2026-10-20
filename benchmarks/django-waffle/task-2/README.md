@@ -19,8 +19,9 @@ Two case-distinct switches with opposite states behave correctly in isolation,
 but interfere when queried consecutively. The initial CI log exposes behavior,
 not a canonical root symbol or file. Search can trace `switch_is_active`,
 `_cache_key`, and `keyfmt`; code reading reveals lowercasing before hashing.
-The diff is intentionally not obfuscated. Merely reading that diff does not
-satisfy this task's search-trajectory acceptance requirement.
+The diff is intentionally not obfuscated. A diff-only successful diagnosis is
+valid Outcome evidence, but does not demonstrate search capability. This old
+frozen task is retained; a redesigned exploration task is separate future work.
 
 ## Reproduce
 
@@ -47,21 +48,34 @@ PY
 
 Use existing explicit model environment configuration; do not place secrets in
 this directory. A completed Diagnosis Run is not necessarily a successful repair.
-The acceptance command exits 1 on structural failure, 0 on structural pass.
+The acceptance command exits 0 when the automatic Outcome checks pass without
+audit errors, otherwise 1. Add `--require-search` to additionally require a
+demonstrated search contribution; it does not change the default Outcome rules.
 Even exit 0 requires the human causal review below. It is not a generic Evaluation
 Harness, model-quality score, or proof of semantic correctness.
 
 ## Acceptance and audit
 
-The checker requires the exact frozen Manifest, supported final root `keyfmt`
-(also accepts the explicitly enumerated qualified name `waffle.utils.keyfmt`),
-an applied patch with passing Public Validation, and artifact-backed search and
-code/diff Evidence referenced by the final supported assessment. It verifies
-Experiment/Hypothesis/Observation/Tool Result provenance without prescribing order.
-Reformulation Evidence Basis references are followed into earlier Hypotheses.
-If search only guides a later Experiment through free-text reasoning rather than
-structured references, the checker reports `not_proven_by_structured_refs` and
-requires human review; it does not claim that search had no causal contribution.
+The checker requires the exact frozen Manifest, a Supported Hypothesis, an
+independent final `root_cause_analysis.location` at `waffle/utils.py`, symbol
+`keyfmt` (or `waffle.utils.keyfmt`), with a range overlapping faulty line 25,
+and passing Public Validation. The initial Hypothesis symbol is not the final
+location oracle. Location references must resolve direct Evidence of the
+supported Hypothesis or historical Evidence explicitly listed in its Evidence
+Basis. The source must be real code/diff Evidence or a matched, untruncated
+`search_code(content)` match covering the same path and coordinates. Historical
+Evidence keeps its original direction and does not become current-H causal
+support. Path search, zero results, truncated matches, unrelated history and
+non-covering matches are rejected. Experiment/Observation/Tool Result artifacts
+are audited. Missing legacy location is read as null, never inferred from Hypothesis.
+
+Results separate `location` (hit/miss/not_provided), `repair_validation`
+(passed/failed/not_run), `causal_review` (required), and `search_capability`
+(verified/not_demonstrated/invalid_trajectory). Search verification requires a
+real matched result whose Evidence ID was used in an assessment, Reformulation
+Evidence Basis, or final location. Free-text-only use is not automatically proven.
+No search yields not_demonstrated, not a failed Outcome. Broken references yield
+an explicit audit error, never a silent pass. Human causal review is still needed.
 
 Human review must check all four causal fields against `ground_truth.json`:
 
@@ -72,7 +86,7 @@ Human review must check all four causal fields against `ground_truth.json`:
 
 Also inspect search query/results, code Evidence, and assessment references:
 search matches alone are not Ground Truth, and an unused search is not a pass.
-Fake-provider tests exercise both search→read and read→search with real tools;
+Fake-provider tests exercise search→read, read→search and read-only with real tools;
 only the Docker process boundary is replaced in those default tests. They are
 contract tests, not evidence of model reasoning. Local probe tests separately
 check base pass, faulty fail three times, and reference repair pass.
@@ -94,3 +108,68 @@ check base pass, faulty fail three times, and reference repair pass.
 The successful real-model acceptance criterion remains open. This ticket does not
 change immutable Hypothesis identity, introduce patch retry/repair, force search,
 or change prompts to obtain a passing demonstration.
+
+## Diagnosis decision repair checks (2026-10-19)
+
+Subsequent general diagnosis fixes add application-to-provider request snapshots
+under `model-requests/` (including correction attempts), bounded Observation
+excerpts for assessment, and explicit historical Evidence Basis knowledge for
+experiment selection. No Task 2-specific tool order or prompt answer was added.
+
+- Intermediate run `66d9d6f9-ebc3-423b-8128-5c67bfcc68bd` stopped at the Tool Budget;
+  it did not establish successful diagnosis.
+- Final run `6222a3df-56a1-4211-8c74-c9595d3c3594` followed the helper into
+  `waffle/utils.py` and identified lowercasing. However, E3 was contradicting,
+  while assessment requested support from E3. The program rejected the direction
+  mismatch. The correction added forbidden `evidence_refs_note`, ending in
+  `schema_failure`. This is still a failed acceptance, not a repaired result.
+- Inspect `model-requests/10-assess-hypothesis.json` and
+  `model-requests/11-assess-hypothesis.json` together with their referenced
+  responses. Known provider credentials are redacted, but code/log snippets can
+  still contain sensitive repository data; do not publish raw Run directories.
+
+Direction-reference clarification was then checked in run
+`af6c03bf-39fc-44e1-94d0-1cd317c58fda`: E2 classified the observed lowercasing
+as supporting H2, and assessment supported H2 without schema correction. This
+single run did not reproduce the Evidence/Assessment direction conflict. It is
+not overall acceptance: root remained `Switch._cache_key`, H1 rejection still
+over-interpreted the caller, and the generated patch again had corrupt hunk
+counts (`corrupt patch at line 10`). No Evidence was automatically relabelled.
+
+## Tool Budget 10 live regression (2026-10-20)
+
+Run `cc5a9f94-6331-45ef-ad5d-be342977ef11` used three diagnostic Experiments
+and one Patch Validation action (4/10 Tool Budget). It rejected H1, formed H2
+from E1, searched `def keyfmt`, recorded the observed `v.lower()` as supporting
+E3, and supported H2. The deterministic Patch Compiler produced the correct
+`waffle/utils.py` replacement; Docker static check and the registered Task 2
+test both exited 0.
+
+The persisted run remains **not accepted** because it was produced under the
+original ADR-0016 contract. Both final report attempts named
+`waffle/utils.py::keyfmt` at lines 20–25 but cited only E3 from `search_code`;
+the former validator required covering `read_code` or diff Evidence, so the run
+ended in `schema_failure`. Under the revised ADR-0016 contract, an offline replay
+of the unchanged first report response passes final-location validation: E3 is a
+`matched` content search whose untruncated `waffle/utils.py` match covers lines
+15–25 and whose provenance resolves through the recorded Experiment, Tool Result,
+Observation and Artifact. The historical `report.json` is intentionally not
+rewritten, and no second live model run was performed.
+
+## Evidence Basis location acceptance (2026-10-20)
+
+After ADR-0016 was amended to separate Hypothesis-relative Evidence direction
+from audited source-coordinate provenance, run
+`7c40fa56-d099-4578-ba16-90aea2940516` completed successfully. H1 ended
+inconclusive after three Experiments; H2 explicitly inherited E1–E3, gathered
+its own Supporting Evidence, identified `waffle/utils.py::keyfmt`, and produced
+the reference repair. Static and registered-test Validation both passed.
+
+The final location covers lines 22–26 and cites E1 from H2's explicit Evidence
+Basis together with direct H2 Evidence E5/E6. Historical Evidence kept its H1
+identity and original direction. The acceptance checker exited 0 with
+`location=hit`, `repair_validation=passed`, `search_capability=verified`, and
+`outcome_pass=true`; human causal review remains required. The run used seven
+of ten Tool calls. It also repeated one `read_code` Experiment and needed one
+Assessment schema correction after reaching the per-Hypothesis Experiment
+limit, so the successful Outcome is not evidence of an optimal trajectory.

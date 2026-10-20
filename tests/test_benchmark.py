@@ -88,6 +88,7 @@ def test_task_1_manifest_uses_the_frozen_waffle_snapshot() -> None:
     )
     assert TASK_1_MANIFEST.read_paths == ["waffle/"]
     assert TASK_1_MANIFEST.write_paths == ["waffle/models.py"]
+    assert TASK_1_MANIFEST.tool_call_limit == 10
 
 
 def test_task_1_context_resolves_ci_log_content_instead_of_path_string() -> None:
