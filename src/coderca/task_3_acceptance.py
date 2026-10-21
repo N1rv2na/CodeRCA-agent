@@ -184,6 +184,11 @@ def check_task_3_run(directory: Path) -> dict[str, Any]:
         ]
         if len(h1_assessments) != 1:
             raise ValueError("Task 3 requires exactly one terminal H1 assessment")
+        if [
+            (item.hypothesis_id, item.status)
+            for item in h1_assessments[0].hypothesis_history
+        ] != [("H1", "rejected")]:
+            raise ValueError("H1 must be persisted as rejected when assessed")
         h1_assessment = _model_artifact(
             directory, h1_assessments[0], HypothesisAssessmentDecision
         )
@@ -200,6 +205,13 @@ def check_task_3_run(directory: Path) -> dict[str, Any]:
         reformulation = reformulations[0]
         if reformulation.sequence <= h1_assessments[0].sequence:
             raise ValueError("H2 appeared before H1 rejection")
+        if [
+            (item.hypothesis_id, item.status)
+            for item in reformulation.hypothesis_history
+        ] != [("H1", "rejected"), ("H2", "proposed")]:
+            raise ValueError(
+                "Reformulation event must persist rejected H1 and Active H2"
+            )
         decision = _model_artifact(
             directory, reformulation, ReformulateHypothesisDecision
         )
@@ -211,6 +223,20 @@ def check_task_3_run(directory: Path) -> dict[str, Any]:
         final = report.final_hypothesis
         if final != h2:
             raise ValueError("final Hypothesis is not the supported H2")
+        h2_assessments = [
+            event
+            for event in events
+            if event.event_type == "hypothesis_assessed"
+            and [item.hypothesis_id for item in event.hypothesis_history]
+            == ["H1", "H2"]
+        ]
+        if len(h2_assessments) != 1 or [
+            (item.hypothesis_id, item.status)
+            for item in h2_assessments[0].hypothesis_history
+        ] != [("H1", "rejected"), ("H2", "supported")]:
+            raise ValueError("Task 3 requires one persisted supported H2 assessment")
+        if reformulation.sequence >= h2_assessments[0].sequence:
+            raise ValueError("H2 must be reformulated before it is supported")
         analysis = report.root_cause_analysis
         if analysis is None or analysis.location is None:
             raise ValueError("Task 3 final Root Cause location is missing")
@@ -238,6 +264,40 @@ def check_task_3_run(directory: Path) -> dict[str, Any]:
             raise ValueError("Task 3 requires a Candidate Patch and Validation")
         if patch.hypothesis_id != "H2" or validation.hypothesis_id != "H2":
             raise ValueError("only supported H2 may patch and validate")
+        patch_events = [
+            event for event in events if event.event_type == "patch_generated"
+        ]
+        validation_events = [
+            event for event in events if event.event_type == "validation_completed"
+        ]
+        if len(patch_events) != 1 or len(validation_events) != 1:
+            raise ValueError("Task 3 requires exactly one Patch and Validation event")
+        patch_event = patch_events[0]
+        validation_event = validation_events[0]
+        supported_sequence = h2_assessments[0].sequence
+        if not (
+            reformulation.sequence
+            < supported_sequence
+            < patch_event.sequence
+            < validation_event.sequence
+        ):
+            raise ValueError("invalid Reformulation, support, Patch, Validation order")
+        for event in (patch_event, validation_event):
+            if [
+                (item.hypothesis_id, item.status)
+                for item in event.hypothesis_history
+            ] != [("H1", "rejected"), ("H2", "supported")]:
+                raise ValueError("Patch and Validation require persisted supported H2")
+        if (
+            patch_event.patch != patch
+            or patch_event.validation_action is None
+            or patch_event.validation_action.hypothesis_id != "H2"
+            or validation_event.patch != patch
+            or validation_event.validation != validation
+            or validation_event.validation_action is None
+            or validation_event.validation_action.hypothesis_id != "H2"
+        ):
+            raise ValueError("Patch or Validation event is not bound to supported H2")
         persisted_validation = PublicValidationResult.model_validate_json(
             artifact_path(directory, validation.artifact_ref).read_text()
         )

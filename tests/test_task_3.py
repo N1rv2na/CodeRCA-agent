@@ -360,6 +360,10 @@ def test_task_3_fake_run_proves_bounded_self_correction(
         "h2_duplicate_basis",
         "h1_revival",
         "h4",
+        "h1_not_rejected_at_assessment",
+        "reformulation_event_missing_h2",
+        "patch_before_h2_supported",
+        "validation_before_h2_supported",
     ],
 )
 def test_task_3_acceptance_rejects_illegal_hypothesis_trajectory(
@@ -397,6 +401,40 @@ def test_task_3_acceptance_rejects_illegal_hypothesis_trajectory(
         h4["hypothesis_id"] = "H4"
         h4["status"] = "rejected"
         report["hypothesis_history"].append(h4)
+    elif corruption == "h1_not_rejected_at_assessment":
+        event = next(e for e in events if e["event_type"] == "hypothesis_assessed")
+        event["hypothesis_history"][-1]["status"] = "proposed"
+    elif corruption == "reformulation_event_missing_h2":
+        event = next(
+            e for e in events if e["event_type"] == "hypothesis_reformulated"
+        )
+        event["hypothesis_history"] = event["hypothesis_history"][:1]
+    elif corruption in {
+        "patch_before_h2_supported",
+        "validation_before_h2_supported",
+    }:
+        event_type = (
+            "patch_generated"
+            if corruption == "patch_before_h2_supported"
+            else "validation_completed"
+        )
+        premature_index = next(
+            index
+            for index, event in enumerate(events)
+            if event["event_type"] == event_type
+        )
+        premature = events.pop(premature_index)
+        assessment_index = next(
+            index
+            for index, event in enumerate(events)
+            if event["event_type"] == "hypothesis_assessed"
+        )
+        premature["hypothesis_history"] = deepcopy(
+            events[assessment_index - 1]["hypothesis_history"]
+        )
+        events.insert(assessment_index, premature)
+        for sequence, event in enumerate(events, start=1):
+            event["sequence"] = sequence
     else:  # pragma: no cover
         raise AssertionError(corruption)
 

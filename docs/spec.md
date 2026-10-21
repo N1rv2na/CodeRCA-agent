@@ -236,7 +236,7 @@ Evidence；该必要条件不代表推理已充分。方向冲突时不得改写
 
 - 实现、测试、事件和报告必须使用 `CONTEXT.md` 中的 Diagnosis Task、Task Manifest、Diagnosis Run、Root Cause、Root Symbol、Hypothesis、Active Hypothesis、Hypothesis History、Evidence、Experiment、Observation、Working Context、Run Artifact、Patch Intent、Exact Replacement、Patch Compiler、Candidate Patch、Validation、Outcome Evaluation 和 Trajectory Evaluation 等规范术语。
 - 当前有效 ADR 为单 Active Hypothesis 与按决策重建上下文、结构化 Tool Runtime、Lightweight Code Search、按运行目录持久化、确定性 Patch Intent 编译、使用本地 Schema 校验与显式 Structured Output Mode 的单一 OpenAI-compatible 云端 ModelProvider，以及最小 Docker 执行边界。旧的多候选状态机、混合检索、检索消融、SQLite、模型兜底、原生 strict Schema 通用最低要求和完整容器控制 ADR 已被取代。
-- Task 1 和 Task 2 已冻结为 django-waffle v5.0.0 基准上的独立人工注入 Faulty Commit；Task 3 与运行时 Model Configuration 仍需按后续 Ticket 冻结。`search_code` 的查询/结果上限由当前工具合同确定。具体云端模型由操作者选择，不写死在本 specification 中，且选择不得扩大产品范围。
+- Task 1、Task 2 和 Task 3 已冻结为 django-waffle v5.0.0 基准上的独立人工注入 Faulty Commit；运行时 Model Configuration 由操作者显式提供。`search_code` 的查询/结果上限由当前工具合同确定。具体云端模型不写死在本 specification 中，且选择不得扩大产品范围。
 - Model Compatibility Gate 是兼容性风险检查，不是 Benchmark 或 Diagnosis Run 授权。若已配置模型在显式 Structured Output Mode 下无法产生通过本地 Schema 校验的阶段对象、工具参数、Evidence 更新和可编译的小型 Patch Intent，操作者应更换 Model Configuration，而不是增加 Provider 品牌分支或模糊输出修复。
 - MVP 的合理简历表述是“在一个冻结 Django 项目上实现可复用的 Diagnosis Task 工作流，并以三个业务逻辑回归任务验证动态工具选择、Evidence 更新和补丁 Validation”。不得表述为能够泛化诊断任意 Python/Django 项目。
 - 在 GitHub issue tracker 中，本 specification 应使用 `ready-for-agent` 标签。后续 ticket 拆解必须以本文件和权威设计为准，不得从旧研究级 specification 恢复已延期能力。
