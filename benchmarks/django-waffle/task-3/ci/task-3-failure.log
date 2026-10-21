@@ -1,0 +1,4 @@
+CRCA_TASK_3_EXPECTED_ASSERTION_MISMATCH
+GET /legacy-dashboard expected status 200, received 404.
+The persisted feature is configured inactive. Initial triage suspects that direct state resolution incorrectly turns that False value into True.
+The bounded summary omits direct evaluator and guard outcomes. The registered reproduction reports both separately; a direct False result with a denied inverse guard would falsify the triage mechanism.

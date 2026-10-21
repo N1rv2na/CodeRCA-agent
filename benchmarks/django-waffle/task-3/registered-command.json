@@ -1,0 +1,21 @@
+{
+  "schema_version": "1",
+  "command_id": "django_waffle_task_3_v1",
+  "argv": [
+    "python",
+    "-c",
+    "\"\"\"Author-owned Task 3 probe; never copied into the Agent workspace.\"\"\"\n# ruff: noqa: E402\nimport sys\n\nfrom django.conf import settings\n\nsettings.configure(\n    SECRET_KEY=\"task-3\",\n    INSTALLED_APPS=[\"django.contrib.auth\", \"django.contrib.contenttypes\", \"waffle\"],\n    DATABASES={\"default\": {\"ENGINE\": \"django.db.backends.sqlite3\", \"NAME\": \":memory:\"}},\n    CACHES={\"default\": {\"BACKEND\": \"django.core.cache.backends.locmem.LocMemCache\"}},\n)\nimport django\n\ndjango.setup()\nfrom django.contrib.auth.models import AnonymousUser\nfrom django.db import connection\nfrom django.http import Http404, HttpRequest, HttpResponse\nfrom waffle import flag_is_active\nfrom waffle.decorators import waffle_flag\nfrom waffle.models import Flag\n\nwith connection.schema_editor() as editor:\n    editor.create_model(Flag)\nFlag.objects.create(name=\"new-dashboard\", everyone=False)\nrequest = HttpRequest()\nrequest.user = AnonymousUser()\ndirect = flag_is_active(request, \"new-dashboard\")\ntry:\n    waffle_flag(\"!new-dashboard\")(lambda _: HttpResponse())(request)\n    inverse_denied = False\nexcept Http404:\n    inverse_denied = True\n\nif direct is not False or inverse_denied:\n    print(\"CRCA_TASK_3_EXPECTED_ASSERTION_MISMATCH\")\n    print(f\"direct_flag_state={direct}\")\n    print(f\"inverse_guard_denied={inverse_denied}\")\n    sys.exit(1)\nprint(\"CRCA_TASK_3_OK\")\n"
+  ],
+  "static_check_argv": [
+    "python",
+    "-c",
+    "from pathlib import Path; [compile(p.read_bytes(), str(p), 'exec') for p in Path('waffle').rglob('*.py')]"
+  ],
+  "timeout_seconds": 30,
+  "test_failure_exit_codes": [
+    1
+  ],
+  "test_failure_output_markers": [
+    "CRCA_TASK_3_EXPECTED_ASSERTION_MISMATCH"
+  ]
+}

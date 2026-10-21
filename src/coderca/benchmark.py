@@ -24,6 +24,7 @@ TASK_1_COMMAND_ID = "django_waffle_task_1_v1"
 TASK_1_CI_LOG = "ci/task-1-failure.log"
 DOCKER_IMAGE = "coderca/django-waffle-task-1:5.0.0-py311-v2"
 TASK_2_FAULTY_COMMIT_SHA = "30c21019633ddd5e60d3628c08692e404ea03d55"
+TASK_3_FAULTY_COMMIT_SHA = "17f2b840e6f39ef0773abb7b4618acfb9f6a6bc7"
 TASK_1_READ_PATHS = ("waffle/",)
 TASK_1_WRITE_PATHS = ("waffle/models.py",)
 
@@ -147,6 +148,51 @@ def materialize_task_2(
     bundle = _PROJECT_ROOT / "benchmarks/django-waffle/task-2/task-2.bundle"
     _run_git(["clone", str(bundle), str(destination)], cwd=_PROJECT_ROOT)
     target = BASE_COMMIT_SHA if snapshot == "base" else TASK_2_FAULTY_COMMIT_SHA
+    _run_git(["checkout", "--detach", target], cwd=destination)
+    if _git_output(["rev-parse", "HEAD"], cwd=destination) != target:
+        raise RuntimeError("materialized checkout did not reach the requested snapshot")
+    return destination
+
+
+def load_task_3_manifest() -> TaskManifest:
+    """Load the independent frozen bounded-self-correction task."""
+    directory = _PROJECT_ROOT / "benchmarks/django-waffle/task-3"
+    manifest = TaskManifest.model_validate_json(
+        (directory / "manifest.json").read_text()
+    )
+    expected = {
+        "schema_version": "1",
+        "task_id": "crca-011-task-3",
+        "repository_id": REPOSITORY_ID,
+        "base_snapshot": BASE_COMMIT_SHA,
+        "faulty_commit": TASK_3_FAULTY_COMMIT_SHA,
+        "ci_log": "ci/task-3-failure.log",
+        "test_command_id": "django_waffle_task_3_v1",
+        "docker_image": DOCKER_IMAGE,
+        "read_paths": ["waffle/"],
+        "write_paths": ["waffle/"],
+        "tool_call_limit": 10,
+    }
+    if manifest.model_dump(mode="json") != expected:
+        raise ValueError("manifest does not match the frozen Task 3 boundary")
+    return manifest
+
+
+def materialize_task_3(
+    destination: Path, *, snapshot: Literal["base", "faulty"] = "faulty"
+) -> Path:
+    """Materialize Task 3 without author-only probe, truth, or repair files."""
+    load_task_3_manifest()
+    if snapshot not in ("base", "faulty"):
+        raise ValueError("unknown Task 3 snapshot")
+    destination = Path(destination)
+    if destination.exists():
+        raise FileExistsError(
+            f"materialization destination already exists: {destination}"
+        )
+    bundle = _PROJECT_ROOT / "benchmarks/django-waffle/task-3/task-3.bundle"
+    _run_git(["clone", str(bundle), str(destination)], cwd=_PROJECT_ROOT)
+    target = BASE_COMMIT_SHA if snapshot == "base" else TASK_3_FAULTY_COMMIT_SHA
     _run_git(["checkout", "--detach", target], cwd=destination)
     if _git_output(["rev-parse", "HEAD"], cwd=destination) != target:
         raise RuntimeError("materialized checkout did not reach the requested snapshot")

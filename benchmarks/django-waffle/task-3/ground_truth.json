@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "task_id": "crca-011-task-3",
+  "root_symbol": "waffle_flag",
+  "trigger_condition": "An inactive persisted flag protects a legacy view through the inverse !flag decorator form.",
+  "defect_mechanism": "waffle_flag strips the ! prefix but reuses flag_is_active directly instead of negating it, so an inactive flag makes the inverse guard deny the view.",
+  "propagation_path": "The request enters the waffle_flag wrapper; direct flag evaluation correctly returns False; the faulty inverse branch stores False as active; the common denial branch raises Http404.",
+  "failure_manifestation": "The legacy endpoint returns 404 even though the persisted feature is inactive and the inverse guard should allow the view.",
+  "reference_repair_behavior": "Negate the direct flag_is_active result in the inverse decorator branch."
+}

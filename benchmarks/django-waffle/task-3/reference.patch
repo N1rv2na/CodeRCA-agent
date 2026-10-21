@@ -1,0 +1,10 @@
+--- a/waffle/decorators.py
++++ b/waffle/decorators.py
+@@ -17,6 +17,6 @@
+         @wraps(view, assigned=WRAPPER_ASSIGNMENTS)
+         def _wrapped_view(request, *args, **kwargs):
+             if flag_name.startswith('!'):
+-                active = flag_is_active(request, flag_name[1:])
++                active = not flag_is_active(request, flag_name[1:])
+             else:
+                 active = flag_is_active(request, flag_name)
