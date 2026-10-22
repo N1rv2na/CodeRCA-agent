@@ -120,12 +120,32 @@ class EvaluationGroundTruth(ContractModel):
 
     schema_version: Literal["1"]
     task_id: NonEmptyString
+    root_path: NonEmptyString
     root_symbol: NonEmptyString
+    accepted_root_symbols: tuple[NonEmptyString, ...] = Field(min_length=1)
+    root_start_line: int = Field(ge=1)
+    root_end_line: int = Field(ge=1)
     trigger_condition: NonEmptyString
     defect_mechanism: NonEmptyString
     propagation_path: NonEmptyString
     failure_manifestation: NonEmptyString
     reference_repair_behavior: NonEmptyString
+
+    @model_validator(mode="after")
+    def validate_root_location(self) -> EvaluationGroundTruth:
+        if (
+            self.root_path.startswith("/")
+            or "\\" in self.root_path
+            or any(part in {"", ".", ".."} for part in self.root_path.split("/"))
+        ):
+            raise ValueError("root path must be canonical repository-relative")
+        if self.root_end_line < self.root_start_line:
+            raise ValueError("root location line range is reversed")
+        if self.root_symbol not in self.accepted_root_symbols:
+            raise ValueError("accepted Root Symbols must contain the canonical symbol")
+        if len(set(self.accepted_root_symbols)) != len(self.accepted_root_symbols):
+            raise ValueError("accepted Root Symbols must be unique")
+        return self
 
 
 class HypothesisProposal(ContractModel):

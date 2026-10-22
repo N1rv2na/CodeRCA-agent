@@ -1,7 +1,11 @@
 {
   "schema_version": "1",
   "task_id": "crca-010-task-2",
+  "root_path": "waffle/utils.py",
   "root_symbol": "keyfmt",
+  "accepted_root_symbols": ["keyfmt", "waffle.utils.keyfmt"],
+  "root_start_line": 25,
+  "root_end_line": 25,
   "trigger_condition": "Two persisted switches have case-distinct names Checkout and checkout and opposite active states; both are queried without clearing the shared cache.",
   "defect_mechanism": "keyfmt lowercases the name before hashing, collapsing distinct case-sensitive database identities into one cache key.",
   "propagation_path": "switch_is_active calls Switch.get; BaseModel._cache_key delegates to keyfmt; the second lookup reuses the first cached Switch.",

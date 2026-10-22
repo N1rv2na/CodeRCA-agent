@@ -1,7 +1,16 @@
 {
   "schema_version": "1",
   "task_id": "crca-011-task-3",
+  "root_path": "waffle/decorators.py",
   "root_symbol": "waffle_flag",
+  "accepted_root_symbols": [
+    "waffle_flag",
+    "waffle.decorators.waffle_flag",
+    "waffle_flag._wrapped_view",
+    "waffle.decorators.waffle_flag._wrapped_view"
+  ],
+  "root_start_line": 20,
+  "root_end_line": 20,
   "trigger_condition": "An inactive persisted flag protects a legacy view through the inverse !flag decorator form.",
   "defect_mechanism": "waffle_flag strips the ! prefix but reuses flag_is_active directly instead of negating it, so an inactive flag makes the inverse guard deny the view.",
   "propagation_path": "The request enters the waffle_flag wrapper; direct flag evaluation correctly returns False; the faulty inverse branch stores False as active; the common denial branch raises Http404.",

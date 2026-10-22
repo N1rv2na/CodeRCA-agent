@@ -21,6 +21,7 @@ dev = [
 
 [project.scripts]
 coderca = "coderca.cli:main"
+coderca-evaluate = "coderca.evaluation_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

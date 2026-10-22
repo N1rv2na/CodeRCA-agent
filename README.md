@@ -50,7 +50,7 @@ Agent 首先只形成 H1。H1 Schema 不接受 Evidence Basis；H2/H3 只能引�
 
 ## 项目状态
 
-当前已实现 Manifest-to-Run、三个冻结任务、通用 ModelProvider/门禁、decision-specific ContextBuilder、Evidence-driven Assessment 与 bounded Reformulation，以及 Docker 测试、结构化 Patch Intent 到 Candidate Patch 的确定性编译、单次补丁 Validation 和 Lightweight Code Search。Task 2 的最新真实运行已定位 `waffle/utils.py::keyfmt`、生成正确补丁并通过位置与 Validation 验收；Task 3 的真实运行已用 H1-bound 测试反证拒绝错误 H1，基于 E1 Reformulate H2，并由 supported H2 完成正确补丁和 Validation。任务验收仍保留人工因果复核，通用 Evaluation Harness 仍待 CRCA-012 实现。
+当前已实现 Manifest-to-Run、三个冻结任务、通用 ModelProvider/门禁、decision-specific ContextBuilder、Evidence-driven Assessment 与 bounded Reformulation，以及 Docker 测试、结构化 Patch Intent 到 Candidate Patch 的确定性编译、单次补丁 Validation、Lightweight Code Search 和逐任务 Engineering Evaluation Harness。Task 2 的最新真实运行已定位 `waffle/utils.py::keyfmt`、生成正确补丁并通过位置与 Validation 验收；Task 3 的真实运行已用 H1-bound 测试反证拒绝错误 H1，基于 E1 Reformulate H2，并由 supported H2 完成正确补丁和 Validation。任务最终接受仍要求结构化人工因果复核；评测不汇总带泛化暗示的成功率。
 
 `Hypothesis.root_symbol` 是不可回写的暂定定位；最终定位单独输出到 `root_cause_analysis.location`，包含路径、符号、Faulty Commit 行区间和代码 Evidence 引用。缺少充分定位信息时返回 `null`。搜索能力与诊断结果分开验收，不调用搜索不等于诊断失败，详见 [ADR-0016](docs/adr/0016-final-location-and-independent-search-acceptance.md)。
 
@@ -99,6 +99,7 @@ export CODERCA_MODEL_STRUCTURED_OUTPUT_MODE="json_text"
 
 - [两周 MVP 设计](docs/design.md)
 - [MVP Specification](docs/spec.md)
+- [Engineering Evaluation 与本地验收](docs/evaluation.md)
 - [统一语言](CONTEXT.md)
 - [架构决策记录](docs/adr/README.md)
 - [文档索引](docs/README.md)

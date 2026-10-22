@@ -2,6 +2,7 @@
 
 - [两周 MVP 项目设计](design.md)：当前权威的产品范围、领域模型、架构、工作流、Lightweight Code Search、沙箱、评测与交付约束。
 - [MVP Specification](spec.md)：当前实现合同、用户故事、技术决策、测试缝与验收边界。
+- [Engineering Evaluation 与本地验收](evaluation.md)：模型门禁、工作区、真实 Diagnosis、逐任务评测、人工因果核查和 Run 审计流程。
 - [统一语言表](../CONTEXT.md)：诊断、验证与评测共享的规范领域术语。
 - [旧术语表入口](glossary.md)：为已有链接保留的兼容跳转页。
 - [架构决策记录](adr/README.md)：关键设计选择、替代方案和后果。
@@ -22,4 +23,4 @@
 - [ADR-0017](adr/0017-executable-experiments-and-bounded-hypothesis-testing.md)：工具能力约束可执行 Experiment，并将每个 Active Hypothesis 的诊断 Experiment 限制为三次。
 - [ADR-0018](adr/0018-deterministic-patch-compilation.md)：模型提交结构化 Patch Intent，程序确定性编译唯一 Candidate Patch，再进入 Public Validation。
 
-通用 Evaluation Harness 尚待实现。ContextBuilder 的确定性 Context View 已实现并有单元测试；Patch Intent 编译不重构 ContextBuilder。Task 2 数据保持冻结；专用自动验收已经通过，但仍不得把单任务 Outcome 或搜索能力通过表述为通用诊断能力，且因果结论仍需人工审核。
+CRCA-012 的通用 Evaluation Harness 与 `coderca-evaluate` CLI 已实现：按任务独立报告 Outcome、Trajectory、搜索展示和人工因果核查，不计算成功率。ContextBuilder 的确定性 Context View 已实现并有单元测试；Patch Intent 编译与 Evaluation 均不重构 ContextBuilder。Task 2 数据保持冻结；不得把单任务 Outcome 或搜索能力通过表述为通用诊断能力，且因果结论仍需人工审核。
