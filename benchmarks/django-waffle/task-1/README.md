@@ -19,14 +19,25 @@ target CI failure, not a byte-for-byte copy of `probe.py` stdout or stderr.
 
 The sole registered command is frozen in `registered-command.json` under ID
 `django_waffle_task_1_v1`; it contains an argv list rather than an arbitrary
-shell string. The benchmark-only `probe.py`
-uses no database, external service, randomness, percentage rollout, or
-concurrency. Host execution of that probe is only an authoring check in
-`tests/test_benchmark.py`; it is not the Docker Tool Runtime planned by
-CRCA-006. The authoring check recognizes the private marker emitted only for
-the target regression and maps it to the public `assertion_mismatch`
-manifestation. Environment or setup failures are classified separately and
-must not be accepted as the target failure.
+shell string. The image-owned `probe.py` uses a minimal unmanaged concrete
+subclass of `AbstractBaseFlag`. This isolates the parent method changed by the
+Faulty Commit and avoids unrelated concrete-model relationship access. The
+probe uses no database, external service, randomness, percentage rollout, or
+concurrency. Host execution is an authoring check in `tests/test_benchmark.py`;
+the production Tool Runtime executes the same registered behavior in Docker.
+The authoring check recognizes the private marker emitted only for the target
+regression and maps it to the public `assertion_mismatch` manifestation.
+Environment or setup failures are classified separately and must not be
+accepted as the target failure.
+
+The benchmark is protected by a three-state invariant:
+
+- Base Snapshot: probe passes;
+- Faulty Commit: probe deterministically fails with the registered marker;
+- Faulty Commit plus author-only `reference.patch`: probe passes.
+
+`reference.patch`, `ground_truth.json`, and `probe.py` remain outside the
+materialized Agent workspace.
 
 Runtime pins are Python 3.11, Django 5.2.16, asgiref 3.9.2, and sqlparse 0.5.4;
 wheel hashes are recorded in `requirements.lock`. `Dockerfile` builds the
@@ -53,4 +64,13 @@ python -m pytest tests/test_benchmark.py -q
 
 The expected Faulty Commit result is a non-zero exit with the sanitized
 `assertion_mismatch` manifestation. Run it three times for the CRCA-002
-reproducibility acceptance check.
+reproducibility acceptance check. After a Diagnosis Run, execute the dedicated
+automated checker with:
+
+```text
+.venv/bin/python -m coderca.task_1_acceptance .coderca-runs/<run-id>
+```
+
+Exit code `0` means the automated Outcome and Trajectory checks pass. The
+causal fields still require the separate human review used by
+`coderca-evaluate`.

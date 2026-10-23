@@ -201,7 +201,7 @@ Evidence；该必要条件不代表推理已充分。方向冲突时不得改写
 17. **搜索安全测试**：验证 Faulty Commit 工作区、Manifest `read_paths`、路径穿越、符号链接逃逸、Ground Truth/参考补丁隔离、查询/结果上限和无 Shell 执行。
 18. **搜索错误测试**：分别验证非法参数、权限拒绝、ripgrep 合法零结果、超时和执行失败，确保 Observation 与错误分类不会混淆。
 19. **Docker 集成测试**：验证临时工作区、默认禁网、注册命令、统一超时和 `CODERCA_MODEL_API_KEY` 不挂载；不把未承诺的生产安全能力写成验收条件。
-20. **补丁测试**：验证只允许 supported Hypothesis 形成 Patch Intent，精确替换的缺失、歧义、重叠、no-op 与路径越界会被拒绝，程序生成的 Candidate Patch 可由 Git 应用且只修改允许源码；Validation 后停止且不会启动第二轮补丁搜索。
+20. **补丁测试**：验证只允许 supported Hypothesis 形成 Patch Intent，精确替换的缺失、歧义、重叠、no-op 与路径越界会被拒绝，程序生成的 Candidate Patch 可由 Git 应用且只修改允许源码；离线编译审计校验 Hypothesis、路径、编辑与 diff，不因解释性 `mechanism` 文本被安全脱敏而误报失败；Validation 后停止且不会启动第二轮补丁搜索。
 21. **运行记录测试**：验证 Manifest 快照、JSONL 事件、JSON 报告、模型响应、工具输出、补丁和 Validation 结果均写入独立运行目录。
 22. **Root Cause Report 测试**：验证最终 Hypothesis、History、Root Symbol、因果字段、Supporting/Contradicting Evidence、修复建议、补丁、Validation 和停止原因的最小合同。
 23. **Outcome Evaluation 测试**：用人工构造的命中、未命中、补丁失败和报告缺字段样例验证确定性规则，不使用模糊文本相似度替代 Root Symbol。

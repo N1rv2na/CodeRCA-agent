@@ -7,7 +7,11 @@ import pytest
 from pydantic import ValidationError
 
 from coderca.contracts import CandidatePatch, ExactReplacement, PatchIntentDecision
-from coderca.patch_compiler import PatchIntentCompilationError, compile_candidate_patch
+from coderca.patch_compiler import (
+    PatchIntentCompilationError,
+    compile_candidate_patch,
+    verify_compiled_candidate,
+)
 
 
 def test_patch_intent_accepts_one_to_three_exact_replacements() -> None:
@@ -83,13 +87,12 @@ def test_patch_contracts_reject_whitespace_only_mechanism(contract: str) -> None
     }
     if contract == "intent":
         payload["edits"] = [{"old_text": "old", "new_text": "new"}]
-        model = PatchIntentDecision
+        with pytest.raises(ValidationError):
+            PatchIntentDecision.model_validate(payload)
     else:
         payload["unified_diff"] = "--- a/src/module.py\n+++ b/src/module.py\n"
-        model = CandidatePatch
-
-    with pytest.raises(ValidationError):
-        model.model_validate(payload)
+        with pytest.raises(ValidationError):
+            CandidatePatch.model_validate(payload)
 
     with pytest.raises(ValidationError):
         CandidatePatch.model_validate(
@@ -179,6 +182,55 @@ def test_compiler_generates_applicable_patch_without_final_source_newline(
 
     assert completed.returncode == 0, completed.stderr
     assert "\\ No newline at end of file" in candidate.unified_diff
+
+
+def test_compiled_candidate_verification_ignores_mechanism_redaction() -> None:
+    intent = PatchIntentDecision(
+        hypothesis_id="H1",
+        target_path="sample.py",
+        mechanism="Restore disabled behavior.",
+        edits=(
+            ExactReplacement(
+                old_text="value = True",
+                new_text="value = False",
+            ),
+        ),
+    )
+    candidate = compile_candidate_patch("value = True\n", intent)
+    redacted = intent.model_copy(
+        update={"mechanism": "Restore [REDACTED] behavior."}
+    )
+
+    verify_compiled_candidate(redacted, candidate)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("hypothesis_id", "H2"), ("target_path", "other.py")],
+)
+def test_compiled_candidate_verification_rejects_functional_metadata_mismatch(
+    field: str,
+    value: str,
+) -> None:
+    intent = PatchIntentDecision(
+        hypothesis_id="H1",
+        target_path="sample.py",
+        mechanism="Restore behavior.",
+        edits=(
+            ExactReplacement(
+                old_text="value = True",
+                new_text="value = False",
+            ),
+        ),
+    )
+    candidate = compile_candidate_patch("value = True\n", intent).model_copy(
+        update={field: value}
+    )
+
+    with pytest.raises(PatchIntentCompilationError) as captured:
+        verify_compiled_candidate(intent, candidate)
+
+    assert captured.value.validation_errors[0]["type"] == "metadata_mismatch"
 
 
 def test_compiler_applies_three_non_overlapping_replacements_and_deletion() -> None:

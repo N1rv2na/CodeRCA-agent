@@ -111,7 +111,6 @@ def verify_compiled_candidate(
     if (
         candidate.hypothesis_id != intent.hypothesis_id
         or candidate.target_path != intent.target_path
-        or candidate.mechanism != intent.mechanism
     ):
         raise PatchIntentCompilationError(
             [{"loc": ["candidate_patch"], "type": "metadata_mismatch"}]

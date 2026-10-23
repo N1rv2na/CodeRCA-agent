@@ -38,23 +38,24 @@ Agent 闭环只有在故障输入可重复、答案不泄漏且测试环境固�
 
 1. 按许可证、构建稳定性和测试耗时筛选并冻结仓库版本。
 2. 创建或提取单一业务逻辑缺陷，确定 Faulty Commit。
-3. 重复验证注册命令的目标失败语义，并冻结不泄漏答案的规范化 CI artifact。
+3. 验证 Base 通过、Faulty Commit 稳定失败、Reference Patch 修复通过，并冻结不泄漏答案的规范化 CI artifact。
 4. 固定依赖与 Django 镜像构建输入。
 5. 编写 Task 1 Manifest 和独立 Ground Truth。
-6. 增加重复复现、输入隔离和 Manifest 合法性检查。
+6. 增加三段式基准不变量、重复复现、输入隔离、Manifest 合法性检查和 Task 1 专用自动验收入口。
 
 ## Acceptance Criteria
 
-- [ ] 从冻结基础快照检出 Faulty Commit 后，注册命令连续运行三次均产生预期失败。
+- [ ] Base Snapshot 的注册行为通过，Faulty Commit 连续运行三次均产生预期失败，应用 author-only Reference Patch 后恢复通过。
 - [ ] Task Manifest 包含规范要求的仓库、commit、日志、命令、镜像、权限和预算字段。
 - [ ] Ground Truth 精确标注一个规范 Root Symbol，并记录完整因果字段。
 - [ ] Agent 可见输入不包含 Root Symbol 标准答案、参考补丁、修复后代码或答案性文本。
 - [ ] 故障属于受支持的业务逻辑回归，且不依赖外部服务、性能、并发或随机行为。
 - [ ] 仓库来源、许可证、冻结版本和复现步骤可审计。
+- [ ] Task 1 专用验收器能基于持久化 Run 产物报告 Outcome 与 Trajectory，并将人工因果核查保持为 required。
 
 ## Testing Strategy
 
-- 在干净工作区重复执行注册命令并断言稳定失败表现；不要求 probe 原始 stderr 与清洗后的 CI artifact 逐字相同。
+- 在相互独立的干净工作区验证 Base/Faulty/Reference 三段式行为，并重复执行 Faulty 注册行为断言稳定失败；不要求 probe 原始 stderr 与清洗后的 CI artifact 逐字相同。
 - 对 Manifest 和 Ground Truth 分别做 Schema 校验与泄漏检查。
 - 构建冻结镜像并验证 Faulty Commit 能在预期环境复现。
 - 用故意篡改的 commit、命令 ID 和路径验证任务校验会拒绝无效输入。

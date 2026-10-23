@@ -230,12 +230,54 @@ def check_task_3_run(directory: Path) -> dict[str, Any]:
             and [item.hypothesis_id for item in event.hypothesis_history]
             == ["H1", "H2"]
         ]
-        if len(h2_assessments) != 1 or [
-            (item.hypothesis_id, item.status)
-            for item in h2_assessments[0].hypothesis_history
-        ] != [("H1", "rejected"), ("H2", "supported")]:
+        supported_h2_assessments = [
+            event
+            for event in h2_assessments
+            if [
+                (item.hypothesis_id, item.status)
+                for item in event.hypothesis_history
+            ]
+            == [("H1", "rejected"), ("H2", "supported")]
+        ]
+        if len(supported_h2_assessments) != 1:
             raise ValueError("Task 3 requires one persisted supported H2 assessment")
-        if reformulation.sequence >= h2_assessments[0].sequence:
+        supported_h2_assessment = supported_h2_assessments[0]
+        if any(
+            event.sequence > supported_h2_assessment.sequence
+            for event in h2_assessments
+        ):
+            raise ValueError("H2 cannot be assessed after terminal support")
+        for event in h2_assessments:
+            if event.sequence >= supported_h2_assessment.sequence:
+                continue
+            if [
+                (item.hypothesis_id, item.status)
+                for item in event.hypothesis_history
+            ] != [("H1", "rejected"), ("H2", "testing")]:
+                raise ValueError("pre-terminal H2 assessment must continue testing")
+            assessment_decision = _model_artifact(
+                directory, event, HypothesisAssessmentDecision
+            )
+            if assessment_decision.outcome != "continue_testing":
+                raise ValueError("pre-terminal H2 assessment is not continue_testing")
+
+        supported_h2_decision = _model_artifact(
+            directory, supported_h2_assessment, HypothesisAssessmentDecision
+        )
+        supporting_h2_evidence = {
+            entry.evidence_id
+            for entry in report.evidence
+            if entry.hypothesis_id == "H2" and entry.direction == "supporting"
+        }
+        if (
+            supported_h2_decision.outcome != "sufficiently_supported"
+            or not supported_h2_decision.evidence_refs
+            or not set(supported_h2_decision.evidence_refs).issubset(
+                supporting_h2_evidence
+            )
+        ):
+            raise ValueError("H2 support lacks valid Supporting Evidence")
+        if reformulation.sequence >= supported_h2_assessment.sequence:
             raise ValueError("H2 must be reformulated before it is supported")
         analysis = report.root_cause_analysis
         if analysis is None or analysis.location is None:
@@ -274,7 +316,7 @@ def check_task_3_run(directory: Path) -> dict[str, Any]:
             raise ValueError("Task 3 requires exactly one Patch and Validation event")
         patch_event = patch_events[0]
         validation_event = validation_events[0]
-        supported_sequence = h2_assessments[0].sequence
+        supported_sequence = supported_h2_assessment.sequence
         if not (
             reformulation.sequence
             < supported_sequence

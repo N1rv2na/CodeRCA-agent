@@ -10,6 +10,7 @@ from typing import Literal, NamedTuple
 import pytest
 
 from coderca.benchmark import (
+    BASE_COMMIT_SHA,
     FAULTY_COMMIT_SHA,
     TASK_1_COMMAND_ID,
     load_task_1_manifest,
@@ -36,7 +37,11 @@ class AuthoringObservation(NamedTuple):
     output: str
 
 
-def run_task_1_authoring_probe(checkout: Path) -> AuthoringObservation:
+def run_task_1_authoring_probe(
+    checkout: Path,
+    *,
+    expected_head: str,
+) -> AuthoringObservation:
     """Verify the frozen fixture locally; this is not a Diagnosis Tool Runtime."""
 
     head = subprocess.run(
@@ -46,8 +51,8 @@ def run_task_1_authoring_probe(checkout: Path) -> AuthoringObservation:
         text=True,
         check=True,
     ).stdout.strip()
-    if head != FAULTY_COMMIT_SHA:
-        raise ValueError("checkout is not the frozen Faulty Commit")
+    if head != expected_head:
+        raise ValueError("checkout is not the expected frozen snapshot")
 
     environment = os.environ.copy()
     environment["PYTHONPATH"] = os.pathsep.join(
@@ -168,7 +173,11 @@ def test_registered_task_1_command_fails_deterministically_three_times(
     checkout = materialize_task_1(tmp_path / "checkout")
 
     observations = [
-        run_task_1_authoring_probe(checkout) for _ in range(3)
+        run_task_1_authoring_probe(
+            checkout,
+            expected_head=FAULTY_COMMIT_SHA,
+        )
+        for _ in range(3)
     ]
 
     assert all(observation.exit_code != 0 for observation in observations)
@@ -184,6 +193,42 @@ def test_registered_task_1_command_fails_deterministically_three_times(
     )
 
 
+def test_task_1_base_passes_faulty_fails_and_reference_repair_passes(
+    tmp_path: Path,
+) -> None:
+    base = materialize_task_1(tmp_path / "base", snapshot="base")
+    faulty = materialize_task_1(tmp_path / "faulty")
+    repaired = materialize_task_1(tmp_path / "repaired")
+
+    base_result = run_task_1_authoring_probe(
+        base,
+        expected_head=BASE_COMMIT_SHA,
+    )
+    faulty_result = run_task_1_authoring_probe(
+        faulty,
+        expected_head=FAULTY_COMMIT_SHA,
+    )
+    subprocess.run(
+        [
+            "git",
+            "apply",
+            str((TASK_DIRECTORY / "reference.patch").resolve()),
+        ],
+        cwd=repaired,
+        check=True,
+    )
+    repaired_result = run_task_1_authoring_probe(
+        repaired,
+        expected_head=FAULTY_COMMIT_SHA,
+    )
+
+    assert base_result.failure_manifestation == "passed"
+    assert faulty_result.failure_manifestation == "assertion_mismatch"
+    assert repaired_result.failure_manifestation == "passed"
+    for author_only in ("ground_truth.json", "reference.patch", "probe.py"):
+        assert not (faulty / author_only).exists()
+
+
 def test_registered_command_does_not_misclassify_environment_failure(
     tmp_path: Path,
 ) -> None:
@@ -192,7 +237,10 @@ def test_registered_command_does_not_misclassify_environment_failure(
         'raise RuntimeError("FAILED environment setup")\n'
     )
 
-    observation = run_task_1_authoring_probe(checkout)
+    observation = run_task_1_authoring_probe(
+        checkout,
+        expected_head=FAULTY_COMMIT_SHA,
+    )
 
     assert observation.exit_code != 0
     assert observation.failure_manifestation == "execution_failed"

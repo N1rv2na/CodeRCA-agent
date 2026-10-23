@@ -1,0 +1,8 @@
+diff --git a/waffle/models.py b/waffle/models.py
+--- a/waffle/models.py
++++ b/waffle/models.py
+@@ -233,3 +233,3 @@ class AbstractBaseFlag(BaseModel):
+         # According to the docs, everyone should override all the other settings
+-        if self.everyone:
++        if self.everyone is not None:
+             return self.everyone

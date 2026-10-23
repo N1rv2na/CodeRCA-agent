@@ -16,15 +16,26 @@ import django  # noqa: E402
 
 django.setup()
 
-from django.contrib.auth import get_user_model  # noqa: E402
-from waffle.models import Flag  # noqa: E402
+from waffle.models import AbstractBaseFlag  # noqa: E402
 
 EXPECTED_FAILURE_MARKER = "CRCA_TASK_1_EXPECTED_ASSERTION_MISMATCH"
 
 
+class ProbeFlag(AbstractBaseFlag):
+    class Meta:
+        app_label = "waffle"
+        managed = False
+
+
+class ProbeActor:
+    is_authenticated = True
+    is_staff = False
+    is_superuser = True
+
+
 def main() -> int:
-    flag = Flag(name="task-1", everyone=False, superusers=True)
-    actor = get_user_model()(is_superuser=True)
+    flag = ProbeFlag(name="task-1", everyone=False, superusers=True)
+    actor = ProbeActor()
     if flag.is_active_for_user(actor) is not False:
         print(EXPECTED_FAILURE_MARKER, file=sys.stderr)
         return 1

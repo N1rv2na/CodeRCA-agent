@@ -187,7 +187,7 @@ def _run_accepted_task_3(
                     "symbol": "waffle_flag",
                     "start_line": 20,
                     "end_line": 20,
-                    "evidence_refs": ["E2"],
+                    "evidence_refs": ["E3"],
                 },
             },
         },
@@ -208,6 +208,27 @@ def _run_accepted_task_3(
                     ),
                     "tool_name": "run_tests",
                     "arguments": {"test_command_id": manifest.test_command_id},
+                },
+                {
+                    "hypothesis_id": "H2",
+                    "purpose": (
+                        "Search for the legacy route before reading the decorator."
+                    ),
+                    "expected_observation": (
+                        "A route match identifies the guard site; no match leaves "
+                        "the decorator implementation unresolved."
+                    ),
+                    "falsification_relevance": (
+                        "A correctly wired route guard would contradict H2."
+                    ),
+                    "tool_name": "search_code",
+                    "arguments": {
+                        "query": "legacy-dashboard",
+                        "search_kind": "content",
+                        "path": "waffle/",
+                        "context_lines": 2,
+                        "max_results": 5,
+                    },
                 },
                 {
                     "hypothesis_id": "H2",
@@ -242,6 +263,15 @@ def _run_accepted_task_3(
                 {
                     "hypothesis_id": "H2",
                     "observation_ref": "O2",
+                    "direction": "inconclusive",
+                    "explanation": (
+                        "The bounded route-name search returned no matches and "
+                        "does not resolve the decorator polarity."
+                    ),
+                },
+                {
+                    "hypothesis_id": "H2",
+                    "observation_ref": "O3",
                     "direction": "supporting",
                     "explanation": truth.defect_mechanism,
                 },
@@ -255,9 +285,17 @@ def _run_accepted_task_3(
                     ),
                 },
                 {
-                    "outcome": "sufficiently_supported",
+                    "outcome": "continue_testing",
                     "evidence_refs": ["E2"],
-                    "rationale": "E2 directly shows the missing inverse operation.",
+                    "rationale": (
+                        "E2 is bounded and inconclusive; a distinct decorator "
+                        "inspection remains available."
+                    ),
+                },
+                {
+                    "outcome": "sufficiently_supported",
+                    "evidence_refs": ["E3"],
+                    "rationale": "E3 directly shows the missing inverse operation.",
                 },
             ],
         },
@@ -362,6 +400,8 @@ def test_task_3_fake_run_proves_bounded_self_correction(
         "h4",
         "h1_not_rejected_at_assessment",
         "reformulation_event_missing_h2",
+        "preterminal_assessment_not_continue_testing",
+        "duplicate_supported_assessment",
         "patch_before_h2_supported",
         "validation_before_h2_supported",
     ],
@@ -409,6 +449,27 @@ def test_task_3_acceptance_rejects_illegal_hypothesis_trajectory(
             e for e in events if e["event_type"] == "hypothesis_reformulated"
         )
         event["hypothesis_history"] = event["hypothesis_history"][:1]
+    elif corruption == "preterminal_assessment_not_continue_testing":
+        event = next(
+            e
+            for e in events
+            if e["event_type"] == "hypothesis_assessed"
+            and e["hypothesis_history"][-1]["status"] == "testing"
+        )
+        artifact_path = run_directory / event["model_response_artifact"]
+        response = json.loads(artifact_path.read_text())
+        response["outcome"] = "sufficiently_supported"
+        artifact_path.write_text(json.dumps(response))
+    elif corruption == "duplicate_supported_assessment":
+        supported_index = next(
+            index
+            for index, event in enumerate(events)
+            if event["event_type"] == "hypothesis_assessed"
+            and event["hypothesis_history"][-1]["status"] == "supported"
+        )
+        events.insert(supported_index + 1, deepcopy(events[supported_index]))
+        for sequence, event in enumerate(events, start=1):
+            event["sequence"] = sequence
     elif corruption in {
         "patch_before_h2_supported",
         "validation_before_h2_supported",

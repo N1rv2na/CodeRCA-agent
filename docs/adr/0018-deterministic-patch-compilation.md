@@ -27,6 +27,12 @@ unified diff 的行号和 hunk 计数。后者是确定性的序列化工作，�
 单文件与路径检查以及 `git apply --check`，之后才能创建 Patch Validation Action 并进入
 Public Validation。
 
+编译与持久化审计只把 `hypothesis_id`、`target_path`、`Exact Replacement` 和由其
+确定性生成的 diff 视为功能性一致性字段。`mechanism` 是面向人的解释文本，不参与
+补丁编译；安全持久化层可能对其中恰好命中配置敏感值的普通词执行脱敏，因此离线
+Evaluation 不要求脱敏后的 `mechanism` 与内存中 Candidate Patch 的说明逐字相等。
+这项例外不适用于 Hypothesis 绑定、目标路径、编辑内容或生成的 diff。
+
 Patch Compiler 不执行模糊匹配、空白修复、大小写归一化、substring 猜测或语义修复。
 Patch Intent 无法编译时，可以复用现有的一次结构化决策纠错；纠错成功前不产生
 Candidate Patch、不创建 Patch Validation Action，也不消耗工具预算。第二次仍失败则

@@ -79,6 +79,19 @@ docker build \
 
 记录三个命令输出中的 `run_directory`。Task 1 是最小闭环；Task 2 展示自主代码探索与最终定位；Task 3 展示错误 H1 被真实 Evidence 反证后受限 Reformulation。
 
+三个任务也提供独立的自动化验收入口：
+
+```bash
+.venv/bin/python -m coderca.task_1_acceptance .coderca-runs/<task-1-run-id>
+.venv/bin/python -m coderca.task_2_acceptance .coderca-runs/<task-2-run-id>
+.venv/bin/python -m coderca.task_3_acceptance .coderca-runs/<task-3-run-id>
+```
+
+Task 1 的基准材料同时由 Base Snapshot 通过、Faulty Commit 稳定失败、应用
+author-only Reference Patch 后通过的三段式不变量保护。Task 3 验收允许 H2 在
+获得不充分 Evidence 后保持 `testing` 并继续 Experiment；只允许一个最终
+`sufficiently_supported` assessment，且它必须引用 H2 Supporting Evidence。
+
 ## 5. 人工因果核查
 
 每个任务建立独立 JSON 文件。核查者对照冻结 Ground Truth 和最终结构化报告，分别判断四个字段，不使用模糊文本相似度：

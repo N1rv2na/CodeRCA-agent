@@ -1,0 +1,41 @@
+{
+  "schema_version": "1",
+  "task_id": "crca-011-task-3",
+  "source_run_id": "ef028279-b64d-41a2-a98f-4459c65318c0",
+  "model_configuration": {
+    "provider": "openai-compatible",
+    "model_id": "deepseek-flash",
+    "structured_output_mode": "json_text",
+    "request_extension_keys": [
+      "thinking"
+    ]
+  },
+  "run_date": "2026-10-22",
+  "code_revision": "0ccd343",
+  "outcome": {
+    "location": "hit",
+    "root_path": "waffle/decorators.py",
+    "root_symbol": "waffle_flag",
+    "patch_intent_compilation": "passed",
+    "candidate_patch": "applicable",
+    "validation": "passed",
+    "report_contract": "passed",
+    "passed": true
+  },
+  "trajectory": {
+    "passed": true,
+    "violations": []
+  },
+  "search_capability": "not_demonstrated",
+  "causal_review": {
+    "status": "pending",
+    "human_review_required": true
+  },
+  "accepted": false,
+  "redactions": [
+    "api_key",
+    "endpoint_url",
+    "machine_specific_paths",
+    "raw_model_requests_and_responses"
+  ]
+}

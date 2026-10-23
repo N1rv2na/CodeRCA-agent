@@ -766,6 +766,7 @@ def test_nine_diagnostic_experiments_leave_one_validation_tool_call() -> None:
                     rationale="A discriminating Experiment remains.",
                 )
             )
+    assert latest_evidence is not None
     state.apply_hypothesis_assessment(
         HypothesisAssessmentDecision(
             outcome="sufficiently_supported",
