@@ -4,7 +4,7 @@ CodeRCA 是一个面向单仓库 CI 测试失败的代码根因诊断 Agent。�
 
 CodeRCA 当前聚焦于 Python 项目中由代码变更引起的确定性业务逻辑回归；外部服务故障、性能问题以及随机或并发失败不在当前支持范围内。
 
-## Why CodeRCA
+## 1. Why CodeRCA
 
 CI 失败诊断不是一次代码生成问题。一个可靠的诊断过程至少需要回答：当前解释如何被证伪、下一次工具调用能提供什么区分性信息、观察结果是否真的支持当前假设、错误方向如何结束，以及修复是否在隔离环境中恢复预期行为。
 
@@ -16,7 +16,7 @@ Hypothesis → Experiment → Tool → Observation → Evidence → Assessment
       └──────── Reformulation after rejection ─────────────┘
 ```
 
-## Diagnosis Workflow
+## 2. Diagnosis Workflow
 
 一次 Diagnosis Run 从 Task Manifest 开始。CodeRCA 首先加载 Faulty Commit、CI Failure、注册测试命令和仓库执行边界，并创建独立的 Run Directory。模型根据初始失败信号形成 H1，程序为其分配稳定 ID 并写入结构化 Diagnosis State。
 
@@ -45,9 +45,9 @@ flowchart TD
     Validate --> Report[Root Cause Report + Run Artifacts]
 ```
 
-## Agent Architecture
+## 3. Agent Architecture
 
-### Architecture Overview
+### 3.1 Architecture Overview
 
 ```mermaid
 flowchart TD
@@ -80,7 +80,7 @@ flowchart TD
 - **Run Store**：持久化 Manifest、事件流、模型请求与响应、Tool Result、Evidence、Candidate Patch、Validation 和最终报告。
 - **Engineering Evaluation**：读取持久化 Run Artifact，分别执行 Outcome Evaluation 与 Trajectory Evaluation，并接收独立 Causal Review。
 
-### Agent Loop
+### 3.2 Agent Loop
 
 CodeRCA 使用显式状态机控制生命周期，在诊断阶段内部运行受约束的 ReAct Loop：
 
@@ -119,7 +119,7 @@ stateDiagram-v2
 
 `Diagnosing → Executing Tool → Updating Evidence → Diagnosing` 构成受约束的 ReAct 循环。一次 Run 在任意时刻只检验一个 Active Hypothesis；Experiment Selection 优先寻找能够区分当前机制真假的 Observation，而不是不断收集支持性文本。
 
-### Agent State Management
+### 3.3 Agent State Management
 
 LLM 调用本身是无状态且不可信的。CodeRCA 不依赖模型记住当前诊断进度，而是由 `DiagnosisStateMachine` 保存规范化的 Agent State，并将其作为每次 Context 重建和后续决策的唯一事实来源。
 
@@ -150,7 +150,7 @@ Next Decision Context
 
 Agent State 只保存结构化诊断事实和 Artifact 引用，不保存完整源码、测试输出或全部模型响应。这些大文本由 `RunStore` 持久化，并由 `ContextBuilder` 在后续 Decision 中选择必要的有界内容。
 
-### Context Engineering
+### 3.4 Context Engineering
 
 CodeRCA 不重放完整 Conversation History，而是区分持久化历史、结构化状态和模型当前需要的上下文：
 
@@ -173,13 +173,13 @@ Context is reconstructed.
 
 完整源码、diff、测试输出和模型响应保存在 Run Directory，但不会在每轮全部回放。当前实现使用固定字段、Hypothesis ID、条数和字符上限完成 Context Selection，不依赖语义记忆或自动摘要。
 
-### Structured Decision Making
+### 3.5 Structured Decision Making
 
 CodeRCA 遵循 **Model decides, program constrains**：模型负责提出 Hypothesis、选择 Experiment、解释 Evidence、提交 Assessment、形成 Patch Intent 和 Root Cause Report；程序负责 Schema、状态、引用、权限、预算和生命周期校验。
 
 ModelProvider 支持 `native_json_schema` 和 `json_text` 两种 Structured Output Mode。无论 Endpoint 是否原生支持 strict JSON Schema，所有结构化输出最终都必须经过本地 JSON 解析与 Pydantic Validation，成功前不能进入 Agent State。非法 JSON、未知字段或合同不匹配会显式失败；每个 Decision 最多允许一次明确 Schema correction，不执行 Markdown stripping、JSON substring extraction 或 fuzzy repair。
 
-### Tool Calling
+### 3.6 Tool Calling
 
 CodeRCA 使用 provider-neutral 的结构化 Tool Selection，而不是把 Agent Core 绑定到某一家 API 的原生 Function Calling：
 
@@ -205,7 +205,7 @@ Tool Catalog 动态投影到 Select Experiment Context；新增工具时由注�
 
 Agent 不获得任意 Shell。每次调用必须绑定当前 Active Hypothesis，并声明目的、预期 Observation 和 falsification relevance；工具参数通过校验后才会进入 Runtime。
 
-### Evidence and Self-Correction
+### 3.7 Evidence and Self-Correction
 
 CodeRCA 将工具输出、诊断事实、证据解释和生命周期决策分为四层：
 
@@ -220,13 +220,13 @@ Evidence 包含稳定 ID、Hypothesis ID、Observation reference、provenance、
 
 当 Contradicting Evidence 否定 H1 时，程序先将 H1 置为 rejected，再允许模型使用正式 Evidence ID 形成实质不同、可再次证伪的 H2。该机制把 Self-Correction 表达为可审计状态转换，而不是模型在自然语言中悄悄修改答案。
 
-### Patch Generation and Validation
+### 3.8 Patch Generation and Validation
 
 只有 Supported Hypothesis 能进入修复阶段。模型提交绑定 Hypothesis 的 Patch Intent，其中包含目标文件、修复机制和一至三个 Exact Replacement；程序检查路径权限、原文唯一匹配、编辑不重叠和非 no-op，随后确定性生成唯一 Candidate Patch。
 
 Candidate Patch 在临时工作区中依次接受 `git apply --check`、静态检查和注册测试。一次 Run 只验证一个正式候选补丁；Validation 失败会如实结束，而不是触发无界补丁搜索。补丁通过也不能替代 Root Cause 定位或因果解释的正确性。
 
-### Run Memory and Auditability
+### 3.9 Run Memory and Auditability
 
 `RunStore` 将每次 Diagnosis Run 保存到独立目录：
 
@@ -244,15 +244,15 @@ Candidate Patch 在临时工作区中依次接受 `git apply --check`、静态�
 
 事件流记录 Stage、Hypothesis History、Experiment、Observation、Evidence、Patch 和 Validation 引用。完整 Artifact 用于审计，但只有当前 Decision 需要的有界内容进入 Working Context。API Key 不进入 Prompt、Tool、Docker 或 Run Artifact；仓库只提交脱敏 Evaluation 摘要，不提交原始 `.coderca-runs/`。
 
-## Engineering Evaluation
+## 4.Engineering Evaluation
 
-### Evaluation Setup
+### 4.1 Evaluation Setup
 
 Engineering Evaluation 使用冻结的 `django-waffle` v5.0.0 仓库、三个独立 Faulty Commit、独立 CI Failure、注册测试命令和 author-only Ground Truth。三个案例均使用 DeepSeek V4.1 Flash（Model ID：`deepseek-flash`），并在相同的 Model Configuration 下完成真实 Diagnosis Run。
 
 测试和补丁 Validation 在固定 Docker 镜像中运行。自动评测只读取持久化的结构化状态与 Artifact；因果字段由人工对照 Ground Truth 审核。三个案例是工程回归证据，不支持成功率、统计显著性或跨仓库泛化声明。
 
-### Evaluation Dimensions
+### 4.2 Evaluation Dimensions
 
 CodeRCA 将最终诊断结果、Agent 执行过程和因果解释分开评测，避免补丁通过掩盖错误定位或不合法的诊断轨迹。
 
@@ -264,7 +264,7 @@ CodeRCA 将最终诊断结果、Agent 执行过程和因果解释分开评测，
 
 `accepted=true` 只有在 Outcome、Trajectory 和 Causal Review 全部通过时成立。Validation 不能掩盖错误定位。对于强调代码探索的 Task，Evaluation 会额外记录有效 Search Evidence 是否实际参与诊断决策，但该字段不是通用任务接受条件，也不强制 Agent 调用 `search_code`。
 
-### Evaluation Cases
+### 4.3 Evaluation Cases
 
 | Case | 设计目标 |
 |---|---|
@@ -272,7 +272,7 @@ CodeRCA 将最终诊断结果、Agent 执行过程和因果解释分开评测，
 | Task 2 | Root Symbol 不在初始失败信息中直接暴露，验证 Agent 通过自主代码探索定位 case-sensitive cache key 缺陷 |
 | Task 3 | 初始 H1 被真实测试 Observation 否定，验证 Evidence-driven H2 Reformulation 和最终修复 |
 
-### Evaluation Results
+### 4.4 Evaluation Results
 
 | Case | Root Location | Patch Validation | Outcome | Trajectory | Causal Review | Full Acceptance |
 |---|---|---|---|---|---|---|
@@ -282,7 +282,7 @@ CodeRCA 将最终诊断结果、Agent 执行过程和因果解释分开评测，
 
 三个 Run 的 Outcome Evaluation 与 Trajectory Evaluation 均已通过。人工 Causal Review 尚未完成，因此当前只表示自动工程验收通过，不将这些任务标记为 Fully Accepted。
 
-### Reproducibility
+### 4.5 Reproducibility
 
 仓库只提交脱敏 Evaluation Snapshot，不提交原始 Run Directory：
 - [Task 1 Evaluation](docs/examples/task-1-evaluation.json)
@@ -292,7 +292,7 @@ CodeRCA 将最终诊断结果、Agent 执行过程和因果解释分开评测，
 
 完整环境准备、工作区物化、真实 Diagnosis、Causal Review 和 `coderca-evaluate` 使用方式见 [Engineering Evaluation 与本地验收](docs/evaluation.md)。
 
-## Quick Start
+## 5. Quick Start
 
 需要 Python 3.10+、Git、Docker 和一个通过兼容性门禁的 OpenAI-compatible Chat Completions Endpoint。
 
@@ -339,7 +339,7 @@ printf "\n"
 
 Compatibility Gate 是单次协议探针，不保证模型长期稳定性；默认单元测试使用 `FakeModelProvider`，不会访问网络、读取 API Key 或要求 Docker。
 
-## Project Structure
+## 6. Project Structure
 
 ```text
 CodeRCA/
@@ -358,7 +358,7 @@ CodeRCA/
 
 进一步阅读：[System Design](docs/design.md) · [Specification](docs/spec.md) · [ADR Index](docs/adr/README.md) · [Documentation Index](docs/README.md)
 
-## TODO
+## 7. TODO
 
 ### Next
 
